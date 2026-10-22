@@ -1,0 +1,22 @@
+package com.liyulottery.config;
+
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.security.config.Customizer;
+import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
+import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.web.SecurityFilterChain;
+
+@Configuration
+@EnableMethodSecurity
+public class SecurityConfiguration {
+    @Bean
+    SecurityFilterChain applicationSecurity(HttpSecurity http) throws Exception {
+        return http.csrf(csrf -> csrf.ignoringRequestMatchers("/telegram/webhook"))
+                .authorizeHttpRequests(auth -> auth
+                        .requestMatchers("/actuator/health", "/actuator/health/**", "/telegram/webhook").permitAll()
+                        .anyRequest().authenticated())
+                .httpBasic(Customizer.withDefaults())
+                .build();
+    }
+}

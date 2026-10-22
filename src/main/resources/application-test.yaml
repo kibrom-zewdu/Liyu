@@ -1,0 +1,12 @@
+spring:
+  datasource:
+    url: jdbc:mariadb://localhost:3306/liyu_test
+    username: test
+    password: test
+  jpa:
+    hibernate:
+      ddl-auto: validate
+app:
+  payments-enabled: false
+  telegram:
+    enabled: false
