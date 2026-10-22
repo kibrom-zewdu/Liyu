@@ -1,6 +1,6 @@
 # LIYU LOTTERY
 
-Telegram-first lottery management for English, Amharic, and Tigrigna customers. This repository currently contains the Phase 1 foundation: Spring Boot configuration, MariaDB/Flyway schema, operational health checks, and container scaffolding. Telegram workflows and production business operations are not yet implemented.
+Telegram-first lottery management for English, Amharic, and Tigrigna customers. This repository contains the Phase 1 foundation and the start of Phase 2: Spring Boot configuration, MariaDB/Flyway schema, operational health checks, container scaffolding, Telegram long polling, user registration, language selection, and a localized native reply keyboard. Campaign, order, payment, ticket, and results workflows are not yet implemented.
 
 ## Safety and business status
 
@@ -11,8 +11,10 @@ Real-money sales are disabled by default (`PAYMENTS_ENABLED=false`). Keep them d
 - Java 25, Maven, Spring Boot 4.1.1
 - MariaDB 11.8, Flyway migrations, Spring Data JPA
 - Spring Security, Bean Validation, Actuator
-- Telegram Bot API library dependency is declared; bot processing is a later phase
+- Telegram integration via the official HTTP Bot API
 - JUnit 5 and Testcontainers dependencies
+
+The Telegram integration uses long polling and persists received updates before processing them. Run one application instance per bot token; do not run competing pollers.
 
 Spring Boot 4.1.1 officially supports Java 25; see [Spring Boot system requirements](https://docs.spring.io/spring-boot/system-requirements.html).
 
@@ -42,11 +44,13 @@ curl http://localhost:8080/actuator/health
 
 MariaDB is not published on a host port by Compose. The app is bound to `127.0.0.1:8080` for local use. In production, terminate TLS at a trusted reverse proxy and restrict access to operational endpoints.
 
+To connect a bot, create it with Telegram's official [BotFather](https://core.telegram.org/bots/features#botfather), then put its token directly into the private `.env` file and set `TELEGRAM_ENABLED=true`. The current Telegram username remains configurable as `TELEGRAM_BOT_USERNAME` and defaults to `AmaziaLotteryBot`. Never put the token in a command, source file, issue, or chat message. Webhooks are not implemented. The first super-admin ID is configuration only at this stage and does not grant an application role.
+
 Flyway applies versioned schema migrations at startup. Hibernate is configured with `ddl-auto: validate`; it does not create or modify the production schema.
 
 ## Configuration
 
-See `.env.example` for placeholder variables. `TELEGRAM_BOT_USERNAME` defaults to the existing `AmaziaLotteryBot`; changing LIYU branding does not change a Telegram username. `INITIAL_SUPER_ADMIN_ID` is reserved for the secure admin bootstrap in the Telegram phase. Never send bot tokens or passwords in chat or commit them.
+See `.env.example` for placeholder variables. `TELEGRAM_BOT_USERNAME` defaults to the existing `AmaziaLotteryBot`; changing LIYU branding does not change a Telegram username. `INITIAL_SUPER_ADMIN_ID` is reserved for the secure admin bootstrap in a later phase. Never send bot tokens or passwords in chat or commit them.
 
 ## Database backup and restore
 
@@ -69,7 +73,10 @@ src/main/resources/i18n/         English, Amharic, and Tigrigna message bundles
 
 ## Implementation status
 
-- Phase 1: in progress. Base configuration, Docker Compose, and initial normalized schema are present; build, migrations, and tests still need verification.
-- Phases 2–7: not implemented yet. In particular, no customer or admin Telegram workflow is active, and payment approvals/tickets/results are not operational.
+- Phase 1: Maven test build passes; migration execution against MariaDB is not yet verified.
+- Phase 2: partial. Telegram long polling, update deduplication, profile persistence, language selection, `/start`, `/help`, `/language`, `/prizes`, `/tickets`, `/results`, and the localized main menu are implemented. Menu actions that depend on campaign or business records currently return translated empty-state messages.
+- Phases 3–7: not implemented yet. No admin Telegram workflow is active, and payment approvals, tickets, and results are not operational.
 
-The Git working tree is on `main`. This environment did not expose the GitHub remote URL successfully, so no push or commit is claimed.
+Amharic and Tigrigna starter interface translations are distinct. Have native speakers review them before customer release. Legal terms, official rules, privacy terms, and payment instructions remain unconfigured and must receive business and legal review; the application does not invent them.
+
+The Git working tree is on `main`. The foundation commit is local; no push is claimed.

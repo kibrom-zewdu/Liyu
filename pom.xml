@@ -15,7 +15,6 @@
     </parent>
     <properties>
         <java.version>25</java.version>
-        <telegrambots.version>9.2.0</telegrambots.version>
         <testcontainers.version>2.0.5</testcontainers.version>
     </properties>
     <dependencies>
@@ -27,8 +26,6 @@
         <dependency><groupId>org.flywaydb</groupId><artifactId>flyway-core</artifactId></dependency>
         <dependency><groupId>org.flywaydb</groupId><artifactId>flyway-mysql</artifactId></dependency>
         <dependency><groupId>org.mariadb.jdbc</groupId><artifactId>mariadb-java-client</artifactId><scope>runtime</scope></dependency>
-        <dependency><groupId>org.telegram</groupId><artifactId>telegrambots-springboot-longpolling-starter</artifactId><version>${telegrambots.version}</version></dependency>
-        <dependency><groupId>org.telegram</groupId><artifactId>telegrambots-client</artifactId><version>${telegrambots.version}</version></dependency>
         <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-test</artifactId><scope>test</scope></dependency>
         <dependency><groupId>org.testcontainers</groupId><artifactId>testcontainers-mariadb</artifactId><version>${testcontainers.version}</version><scope>test</scope></dependency>
         <dependency><groupId>org.testcontainers</groupId><artifactId>testcontainers-junit-jupiter</artifactId><version>${testcontainers.version}</version><scope>test</scope></dependency>
