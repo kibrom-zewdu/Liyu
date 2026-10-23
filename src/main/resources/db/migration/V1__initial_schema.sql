@@ -145,7 +145,7 @@ CREATE TABLE payment_instruction_translations (
 ) ENGINE=InnoDB;
 
 CREATE TABLE app_settings (
-    setting_key VARCHAR(100) NOT NULL, setting_value TEXT NOT NULL, sensitive BOOLEAN NOT NULL DEFAULT FALSE,
+    setting_key VARCHAR(100) NOT NULL, setting_value TEXT NOT NULL, is_sensitive BOOLEAN NOT NULL DEFAULT FALSE,
     updated_by_admin_id BIGINT NULL, updated_at TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
     PRIMARY KEY (setting_key), CONSTRAINT fk_settings_admin FOREIGN KEY (updated_by_admin_id) REFERENCES admins(id)
 ) ENGINE=InnoDB;
