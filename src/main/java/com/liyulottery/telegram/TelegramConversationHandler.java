@@ -10,6 +10,8 @@ import com.liyulottery.user.TelegramUserService;
 import com.liyulottery.order.OrderService;
 import com.liyulottery.payment.PaymentReviewHandler;
 import com.liyulottery.ticket.TicketIssuanceService;
+import com.liyulottery.draw.DrawResultService;
+import com.liyulottery.draw.DrawResultAdminHandler;
 import org.springframework.stereotype.Service;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 
@@ -34,6 +36,8 @@ public class TelegramConversationHandler {
     private final OrderService orders;
     private final PaymentReviewHandler paymentReview;
     private final TicketIssuanceService ticketIssuance;
+    private final DrawResultService drawResults;
+    private final DrawResultAdminHandler drawResultAdmin;
     private final ZoneId businessZone;
 
     public TelegramConversationHandler(TelegramApiClient telegram, TelegramUserService users, TranslationService translations,
@@ -41,6 +45,8 @@ public class TelegramConversationHandler {
                                        OrderService orders,
                                        PaymentReviewHandler paymentReview,
                                        TicketIssuanceService ticketIssuance,
+                                       DrawResultService drawResults,
+                                       DrawResultAdminHandler drawResultAdmin,
                                        @Value("${app.timezone:Africa/Addis_Ababa}") String timeZone) {
         this.telegram = telegram;
         this.users = users;
@@ -50,6 +56,8 @@ public class TelegramConversationHandler {
         this.orders = orders;
         this.paymentReview = paymentReview;
         this.ticketIssuance = ticketIssuance;
+        this.drawResults = drawResults;
+        this.drawResultAdmin = drawResultAdmin;
         this.businessZone = ZoneId.of(timeZone);
     }
 
@@ -72,6 +80,11 @@ public class TelegramConversationHandler {
         Optional<AdminConversationHandler.AdminReply> adminReply = adminConversations.handle(id.longValue(), text, preferredLanguage);
         if (adminReply.isPresent()) {
             telegram.sendMessage(targetChat, adminReply.get().text(), adminReply.get().replyMarkup());
+            return;
+        }
+        Optional<String> resultsAdminReply=drawResultAdmin.handle(id.longValue(),text);
+        if(resultsAdminReply.isPresent()) {
+            telegram.sendMessage(targetChat,resultsAdminReply.get(),mainMenu(preferredLanguage));
             return;
         }
         Optional<String> paymentReply = paymentReview.handle(id.longValue(), targetChat, text);
@@ -117,7 +130,7 @@ public class TelegramConversationHandler {
         } else if (command.startsWith("/tickets") || text.equals(translations.text("menu.tickets", language))) {
             sendTickets(targetChat,id.longValue(),text,language);
         } else if (command.startsWith("/results") || text.equals(translations.text("menu.results", language))) {
-            send(targetChat, "results.none", language, mainMenu(language));
+            sendResults(targetChat,language);
         } else if (text.equals(translations.text("menu.buy", language)) || command.startsWith("/buy")) {
             Optional<CampaignView> available = campaigns.openCampaign(language);
             if (available.isEmpty()) send(targetChat, "campaign.none_buy", language, mainMenu(language));
@@ -131,6 +144,23 @@ public class TelegramConversationHandler {
         } else {
             send(targetChat, "help.prompt", language, mainMenu(language));
         }
+    }
+
+    private void sendResults(long chatId,String language) {
+        List<DrawResultService.PublishedResult> published=drawResults.published(language);
+        if(published.isEmpty()) { send(chatId,"results.none",language,mainMenu(language)); return; }
+        StringBuilder response=new StringBuilder();
+        long prior=-1;
+        for(var result:published) {
+            if(result.resultId()!=prior) {
+                if(!response.isEmpty()) response.append("\n\n");
+                response.append(translations.text("results.header",language,result.campaignTitle(),result.version(),formatDate(result.publishedAt(),language)))
+                        .append("\n").append(result.notice());
+                prior=result.resultId();
+            }
+            response.append("\n").append(translations.text("results.entry",language,result.ticketNumber(),result.prizeName()==null?translations.text("results.prize_pending",language):result.prizeName()));
+        }
+        telegram.sendMessage(chatId,response.toString(),mainMenu(language));
     }
 
     private void sendTickets(long chatId,long telegramUserId,String command,String language) {
