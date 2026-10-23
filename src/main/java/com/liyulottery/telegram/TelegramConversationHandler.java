@@ -15,6 +15,8 @@ import com.liyulottery.draw.DrawResultAdminHandler;
 import com.liyulottery.report.ReportsHandler;
 import com.liyulottery.support.SupportService;
 import com.liyulottery.support.SupportAdminHandler;
+import com.liyulottery.settings.PublicSettingsService;
+import com.liyulottery.settings.PublicSettingsHandler;
 import org.springframework.stereotype.Service;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 
@@ -44,6 +46,8 @@ public class TelegramConversationHandler {
     private final ReportsHandler reportsHandler;
     private final SupportService support;
     private final SupportAdminHandler supportAdmin;
+    private final PublicSettingsService publicSettings;
+    private final PublicSettingsHandler settingsHandler;
     private final ZoneId businessZone;
 
     public TelegramConversationHandler(TelegramApiClient telegram, TelegramUserService users, TranslationService translations,
@@ -56,6 +60,8 @@ public class TelegramConversationHandler {
                                        ReportsHandler reportsHandler,
                                        SupportService support,
                                        SupportAdminHandler supportAdmin,
+                                       PublicSettingsService publicSettings,
+                                       PublicSettingsHandler settingsHandler,
                                        @Value("${app.timezone:Africa/Addis_Ababa}") String timeZone) {
         this.telegram = telegram;
         this.users = users;
@@ -70,6 +76,8 @@ public class TelegramConversationHandler {
         this.reportsHandler = reportsHandler;
         this.support=support;
         this.supportAdmin=supportAdmin;
+        this.publicSettings=publicSettings;
+        this.settingsHandler=settingsHandler;
         this.businessZone = ZoneId.of(timeZone);
     }
 
@@ -107,6 +115,11 @@ public class TelegramConversationHandler {
         Optional<String> supportAdminReply=supportAdmin.handle(id.longValue(),text);
         if(supportAdminReply.isPresent()) {
             telegram.sendMessage(targetChat,supportAdminReply.get(),mainMenu(preferredLanguage));
+            return;
+        }
+        Optional<String> settingAdminReply=settingsHandler.handle(id.longValue(),text);
+        if(settingAdminReply.isPresent()) {
+            telegram.sendMessage(targetChat,settingAdminReply.get(),mainMenu(preferredLanguage));
             return;
         }
         Optional<String> paymentReply = paymentReview.handle(id.longValue(), targetChat, text);
@@ -155,6 +168,8 @@ public class TelegramConversationHandler {
             sendResults(targetChat,language);
         } else if (command.equals("/support")) {
             handleSupport(targetChat,id.longValue(),text,language);
+        } else if (command.equals("/privacy")) {
+            telegram.sendMessage(targetChat,publicSettings.privacyNotice(language).orElseGet(()->translations.text("privacy.none",language)),mainMenu(language));
         } else if (text.equals(translations.text("menu.buy", language)) || command.startsWith("/buy")) {
             Optional<CampaignView> available = campaigns.openCampaign(language);
             if (available.isEmpty()) send(targetChat, "campaign.none_buy", language, mainMenu(language));
