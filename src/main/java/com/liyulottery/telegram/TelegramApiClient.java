@@ -13,10 +13,14 @@ public class TelegramApiClient {
     private final RestClient restClient;
 
     public TelegramApiClient(TelegramProperties properties) {
+        this(properties, RestClient.builder());
+    }
+
+    TelegramApiClient(TelegramProperties properties, RestClient.Builder builder) {
         if (properties.token() == null || properties.token().isBlank()) {
             throw new IllegalStateException("TELEGRAM_BOT_TOKEN must be configured when Telegram is enabled");
         }
-        this.restClient = RestClient.builder()
+        this.restClient = builder
                 .baseUrl("https://api.telegram.org/bot" + properties.token() + "/")
                 .build();
     }
