@@ -12,6 +12,7 @@ import com.liyulottery.payment.PaymentReviewHandler;
 import com.liyulottery.ticket.TicketIssuanceService;
 import com.liyulottery.draw.DrawResultService;
 import com.liyulottery.draw.DrawResultAdminHandler;
+import com.liyulottery.report.ReportsHandler;
 import org.springframework.stereotype.Service;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 
@@ -38,6 +39,7 @@ public class TelegramConversationHandler {
     private final TicketIssuanceService ticketIssuance;
     private final DrawResultService drawResults;
     private final DrawResultAdminHandler drawResultAdmin;
+    private final ReportsHandler reportsHandler;
     private final ZoneId businessZone;
 
     public TelegramConversationHandler(TelegramApiClient telegram, TelegramUserService users, TranslationService translations,
@@ -47,6 +49,7 @@ public class TelegramConversationHandler {
                                        TicketIssuanceService ticketIssuance,
                                        DrawResultService drawResults,
                                        DrawResultAdminHandler drawResultAdmin,
+                                       ReportsHandler reportsHandler,
                                        @Value("${app.timezone:Africa/Addis_Ababa}") String timeZone) {
         this.telegram = telegram;
         this.users = users;
@@ -58,6 +61,7 @@ public class TelegramConversationHandler {
         this.ticketIssuance = ticketIssuance;
         this.drawResults = drawResults;
         this.drawResultAdmin = drawResultAdmin;
+        this.reportsHandler = reportsHandler;
         this.businessZone = ZoneId.of(timeZone);
     }
 
@@ -85,6 +89,11 @@ public class TelegramConversationHandler {
         Optional<String> resultsAdminReply=drawResultAdmin.handle(id.longValue(),text);
         if(resultsAdminReply.isPresent()) {
             telegram.sendMessage(targetChat,resultsAdminReply.get(),mainMenu(preferredLanguage));
+            return;
+        }
+        Optional<String> reportReply=reportsHandler.handle(id.longValue(),text);
+        if(reportReply.isPresent()) {
+            telegram.sendMessage(targetChat,reportReply.get(),mainMenu(preferredLanguage));
             return;
         }
         Optional<String> paymentReply = paymentReview.handle(id.longValue(), targetChat, text);
