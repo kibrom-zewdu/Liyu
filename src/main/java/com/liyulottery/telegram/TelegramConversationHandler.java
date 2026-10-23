@@ -13,6 +13,8 @@ import com.liyulottery.ticket.TicketIssuanceService;
 import com.liyulottery.draw.DrawResultService;
 import com.liyulottery.draw.DrawResultAdminHandler;
 import com.liyulottery.report.ReportsHandler;
+import com.liyulottery.support.SupportService;
+import com.liyulottery.support.SupportAdminHandler;
 import org.springframework.stereotype.Service;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 
@@ -40,6 +42,8 @@ public class TelegramConversationHandler {
     private final DrawResultService drawResults;
     private final DrawResultAdminHandler drawResultAdmin;
     private final ReportsHandler reportsHandler;
+    private final SupportService support;
+    private final SupportAdminHandler supportAdmin;
     private final ZoneId businessZone;
 
     public TelegramConversationHandler(TelegramApiClient telegram, TelegramUserService users, TranslationService translations,
@@ -50,6 +54,8 @@ public class TelegramConversationHandler {
                                        DrawResultService drawResults,
                                        DrawResultAdminHandler drawResultAdmin,
                                        ReportsHandler reportsHandler,
+                                       SupportService support,
+                                       SupportAdminHandler supportAdmin,
                                        @Value("${app.timezone:Africa/Addis_Ababa}") String timeZone) {
         this.telegram = telegram;
         this.users = users;
@@ -62,6 +68,8 @@ public class TelegramConversationHandler {
         this.drawResults = drawResults;
         this.drawResultAdmin = drawResultAdmin;
         this.reportsHandler = reportsHandler;
+        this.support=support;
+        this.supportAdmin=supportAdmin;
         this.businessZone = ZoneId.of(timeZone);
     }
 
@@ -94,6 +102,11 @@ public class TelegramConversationHandler {
         Optional<String> reportReply=reportsHandler.handle(id.longValue(),text);
         if(reportReply.isPresent()) {
             telegram.sendMessage(targetChat,reportReply.get(),mainMenu(preferredLanguage));
+            return;
+        }
+        Optional<String> supportAdminReply=supportAdmin.handle(id.longValue(),text);
+        if(supportAdminReply.isPresent()) {
+            telegram.sendMessage(targetChat,supportAdminReply.get(),mainMenu(preferredLanguage));
             return;
         }
         Optional<String> paymentReply = paymentReview.handle(id.longValue(), targetChat, text);
@@ -140,6 +153,8 @@ public class TelegramConversationHandler {
             sendTickets(targetChat,id.longValue(),text,language);
         } else if (command.startsWith("/results") || text.equals(translations.text("menu.results", language))) {
             sendResults(targetChat,language);
+        } else if (command.equals("/support")) {
+            handleSupport(targetChat,id.longValue(),text,language);
         } else if (text.equals(translations.text("menu.buy", language)) || command.startsWith("/buy")) {
             Optional<CampaignView> available = campaigns.openCampaign(language);
             if (available.isEmpty()) send(targetChat, "campaign.none_buy", language, mainMenu(language));
@@ -152,6 +167,24 @@ public class TelegramConversationHandler {
             sendDrawInformation(targetChat, language);
         } else {
             send(targetChat, "help.prompt", language, mainMenu(language));
+        }
+    }
+
+    private void handleSupport(long chatId,long telegramUserId,String text,String language) {
+        String[] args=text.trim().split("\\s+",3);
+        if(args.length<2||(args[1].matches("[0-9]+")&&args.length<3)) { send(chatId,"support.usage",language,mainMenu(language)); return; }
+        try {
+            if(args[1].matches("[0-9]+")) {
+                long requestId=Long.parseLong(args[1]);
+                support.customerMessage(telegramUserId,requestId,args[2]);
+                telegram.sendMessage(chatId,translations.text("support.continued",language,requestId),mainMenu(language));
+            } else {
+                String message=text.trim().substring("/support".length()).trim();
+                long requestId=support.open(telegramUserId,message);
+                telegram.sendMessage(chatId,translations.text("support.opened",language,requestId),mainMenu(language));
+            }
+        } catch(RuntimeException failure) {
+            telegram.sendMessage(chatId,translations.text("support.failed",language),mainMenu(language));
         }
     }
 
