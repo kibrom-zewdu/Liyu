@@ -44,7 +44,17 @@ curl http://localhost:8080/actuator/health
 
 MariaDB is not published on a host port by Compose. The app is bound to `127.0.0.1:8080` for local use. In production, terminate TLS at a trusted reverse proxy and restrict access to operational endpoints.
 
-To connect a bot, create it with Telegram's official [BotFather](https://core.telegram.org/bots/features#botfather), then put its token directly into the private `.env` file and set `TELEGRAM_ENABLED=true`. The current Telegram username remains configurable as `TELEGRAM_BOT_USERNAME` and defaults to `AmaziaLotteryBot`. Never put the token in a command, source file, issue, or chat message. Webhooks are not implemented. The first super-admin ID is configuration only at this stage and does not grant an application role.
+To connect a bot, create it with Telegram's official [BotFather](https://core.telegram.org/bots/features#botfather), then put its token directly into the private `.env` file and set `TELEGRAM_ENABLED=true`. The current Telegram username remains configurable as `TELEGRAM_BOT_USERNAME` and defaults to `AmaziaLotteryBot`. Never put the token in a command, source file, issue, or chat message. Webhooks are not implemented.
+
+The first super-admin is added by an authorized database operator after independently confirming the owner's Telegram numeric ID. Run these statements using a restricted DBA session, replacing the placeholder with that verified ID:
+
+```sql
+INSERT INTO admins(telegram_user_id, active) VALUES (<VERIFIED_OWNER_TELEGRAM_ID>, TRUE);
+INSERT INTO admin_roles(admin_id, role_name)
+SELECT id, 'SUPER_ADMIN' FROM admins WHERE telegram_user_id = <VERIFIED_OWNER_TELEGRAM_ID>;
+```
+
+Do not expose a SQL console to the bot or customers. `INITIAL_SUPER_ADMIN_ID` is reserved for a future reviewed bootstrap flow; it currently has no effect.
 
 Flyway applies versioned schema migrations at startup. Hibernate is configured with `ddl-auto: validate`; it does not create or modify the production schema.
 
@@ -75,7 +85,8 @@ src/main/resources/i18n/         English, Amharic, and Tigrigna message bundles
 
 - Phase 1: Maven test build passes; migration execution against MariaDB is not yet verified.
 - Phase 2: partial. Telegram long polling, update deduplication, profile persistence, language selection, `/start`, `/help`, `/language`, `/prizes`, `/tickets`, `/results`, and the localized main menu are implemented. Menu actions that depend on campaign or business records currently return translated empty-state messages.
-- Phases 3–7: not implemented yet. No admin Telegram workflow is active, and payment approvals, tickets, and results are not operational.
+- Phase 3: partial. Campaign status rules, multilingual campaign/prize reads, audited campaign creation and lifecycle services, Telegram campaign creation prompts, and campaign commands are being added. Prize administration commands and editing the remaining campaign fields are still incomplete.
+- Phases 4–7: not implemented yet. Payment approvals, ticket issuance, and official result workflows are not operational.
 
 Amharic and Tigrigna starter interface translations are distinct. Have native speakers review them before customer release. Legal terms, official rules, privacy terms, and payment instructions remain unconfigured and must receive business and legal review; the application does not invent them.
 

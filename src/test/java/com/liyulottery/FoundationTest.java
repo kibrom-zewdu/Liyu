@@ -18,7 +18,8 @@ class FoundationTest {
                 "welcome.returning", "language.required", "language.choose", "menu.prizes", "menu.buy",
                 "menu.tickets", "menu.draw", "menu.results", "menu.help", "menu.language", "campaign.none",
                 "campaign.none_prizes", "campaign.none_buy", "campaign.none_draw", "tickets.empty", "results.none",
-                "help.prompt", "help.instructions"};
+                "campaign.announcement", "campaign.prize_header", "campaign.prize_item", "campaign.draw_info",
+                "campaign.date_pending", "admin.denied", "admin.back", "admin.cancel", "help.prompt", "help.instructions"};
         for (String language : new String[]{"en", "am", "ti"}) {
             Properties messages = PropertiesLoaderUtils.loadProperties(
                     new ClassPathResource("i18n/messages_" + language + ".properties"));
