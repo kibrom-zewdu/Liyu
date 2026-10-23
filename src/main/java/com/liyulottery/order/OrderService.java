@@ -2,6 +2,7 @@ package com.liyulottery.order;
 
 import com.liyulottery.admin.AdminAuthorizationService;
 import com.liyulottery.admin.AdminRole;
+import com.liyulottery.ticket.TicketIssuanceService;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -17,11 +18,13 @@ public class OrderService {
     private final AdminAuthorizationService authorization;
     private final boolean paymentsEnabled;
     private final long maximumReceiptBytes;
+    private final TicketIssuanceService ticketIssuance;
 
     public OrderService(JdbcTemplate jdbc, AdminAuthorizationService authorization,
                         @Value("${app.payments-enabled:false}") boolean paymentsEnabled,
-                        @Value("${app.receipt.max-size-bytes:10485760}") long maximumReceiptBytes) {
-        this.jdbc=jdbc; this.authorization=authorization; this.paymentsEnabled=paymentsEnabled; this.maximumReceiptBytes=maximumReceiptBytes;
+                        @Value("${app.receipt.max-size-bytes:10485760}") long maximumReceiptBytes,
+                        TicketIssuanceService ticketIssuance) {
+        this.jdbc=jdbc; this.authorization=authorization; this.paymentsEnabled=paymentsEnabled; this.maximumReceiptBytes=maximumReceiptBytes; this.ticketIssuance=ticketIssuance;
     }
 
     @Transactional
@@ -90,9 +93,9 @@ public class OrderService {
     }
 
     @Transactional
-    public void decide(long telegramAdminId,String reference,boolean approve,String transactionReference,String note) {
+    public List<String> decide(long telegramAdminId,String reference,boolean approve,String transactionReference,String note) {
         long adminId=authorization.requireRole(telegramAdminId,AdminRole.PAYMENT_REVIEWER);
-        jdbc.query("SELECT o.id,o.status,r.id FROM orders o JOIN payment_receipts r ON r.order_id=o.id AND r.status='PENDING' WHERE o.order_reference=? ORDER BY r.submission_number DESC LIMIT 1 FOR UPDATE",rs->{
+        return jdbc.query("SELECT o.id,o.status,r.id FROM orders o JOIN payment_receipts r ON r.order_id=o.id AND r.status='PENDING' WHERE o.order_reference=? ORDER BY r.submission_number DESC LIMIT 1 FOR UPDATE",rs->{
             if(!rs.next()) throw new IllegalStateException("No pending receipt found for that order.");
             long orderId=rs.getLong(1),receiptId=rs.getLong(3);
             if(!"RECEIPT_SUBMITTED".equals(rs.getString(2))) throw new IllegalStateException("Order is not awaiting payment review.");
@@ -100,13 +103,19 @@ public class OrderService {
             jdbc.update("INSERT INTO payment_verifications(order_id,receipt_id,reviewer_admin_id,decision,transaction_reference,internal_note) VALUES(?,?,?,?,?,?)",orderId,receiptId,adminId,approve?"APPROVED":"REJECTED",transactionReference,note);
             jdbc.update("UPDATE payment_receipts SET status=? WHERE id=?",approve?"APPROVED":"REJECTED",receiptId);
             jdbc.update("UPDATE orders SET status=? WHERE id=?",approve?"PAYMENT_VERIFIED":"REJECTED",orderId);
-            jdbc.update("INSERT INTO audit_logs(actor_admin_id,action,target_type,target_id,after_json) VALUES(?,?,?,?,JSON_OBJECT('decision',?,'transaction_reference',?))",adminId,approve?"PAYMENT_APPROVED":"PAYMENT_REJECTED","ORDER",reference,approve?"APPROVED":"REJECTED",transactionReference);
-            return null;
+            jdbc.update("INSERT INTO audit_logs(actor_admin_id,action,target_type,target_id,after_json) VALUES(?,?,?,?,JSON_OBJECT('decision',?))",adminId,approve?"PAYMENT_APPROVED":"PAYMENT_REJECTED","ORDER",reference,approve?"APPROVED":"REJECTED");
+            return approve?ticketIssuance.issueVerifiedOrder(telegramAdminId,reference):List.of();
         },reference);
+    }
+
+    @Transactional(readOnly=true)
+    public OrderCustomer orderCustomer(String reference) {
+        return jdbc.queryForObject("SELECT u.telegram_user_id,COALESCE(u.language_code,'en') FROM orders o JOIN users u ON u.id=o.user_id WHERE o.order_reference=?",(rs,n)->new OrderCustomer(rs.getLong(1),rs.getString(2)),reference);
     }
 
     public record OrderQuote(int quantity,BigDecimal unitPrice,BigDecimal total,String currency) {}
     public record OrderSummary(String reference,int quantity,BigDecimal unitPrice,BigDecimal total,String currency,String status) {}
+    public record OrderCustomer(long telegramUserId,String language) {}
     public record PaymentInstruction(String code,String title,String instructions) {}
     public record PendingPayment(String reference,BigDecimal total,String currency,int quantity,long receiptId,String fileId,String mimeType,java.time.Instant submittedAt,long customerTelegramId,String customerName) {}
 }

@@ -9,6 +9,7 @@ import com.liyulottery.admin.AdminConversationHandler;
 import com.liyulottery.user.TelegramUserService;
 import com.liyulottery.order.OrderService;
 import com.liyulottery.payment.PaymentReviewHandler;
+import com.liyulottery.ticket.TicketIssuanceService;
 import org.springframework.stereotype.Service;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 
@@ -32,12 +33,14 @@ public class TelegramConversationHandler {
     private final AdminConversationHandler adminConversations;
     private final OrderService orders;
     private final PaymentReviewHandler paymentReview;
+    private final TicketIssuanceService ticketIssuance;
     private final ZoneId businessZone;
 
     public TelegramConversationHandler(TelegramApiClient telegram, TelegramUserService users, TranslationService translations,
                                        CampaignService campaigns, AdminConversationHandler adminConversations,
                                        OrderService orders,
                                        PaymentReviewHandler paymentReview,
+                                       TicketIssuanceService ticketIssuance,
                                        @Value("${app.timezone:Africa/Addis_Ababa}") String timeZone) {
         this.telegram = telegram;
         this.users = users;
@@ -46,6 +49,7 @@ public class TelegramConversationHandler {
         this.adminConversations = adminConversations;
         this.orders = orders;
         this.paymentReview = paymentReview;
+        this.ticketIssuance = ticketIssuance;
         this.businessZone = ZoneId.of(timeZone);
     }
 
@@ -111,7 +115,7 @@ public class TelegramConversationHandler {
         } else if (command.startsWith("/prizes") || text.equals(translations.text("menu.prizes", language))) {
             sendPrizes(targetChat, language);
         } else if (command.startsWith("/tickets") || text.equals(translations.text("menu.tickets", language))) {
-            send(targetChat, "tickets.empty", language, mainMenu(language));
+            sendTickets(targetChat,id.longValue(),text,language);
         } else if (command.startsWith("/results") || text.equals(translations.text("menu.results", language))) {
             send(targetChat, "results.none", language, mainMenu(language));
         } else if (text.equals(translations.text("menu.buy", language)) || command.startsWith("/buy")) {
@@ -127,6 +131,18 @@ public class TelegramConversationHandler {
         } else {
             send(targetChat, "help.prompt", language, mainMenu(language));
         }
+    }
+
+    private void sendTickets(long chatId,long telegramUserId,String command,String language) {
+        try {
+            String[] parts=command.split("\\s+"); int page=parts.length>1?Integer.parseInt(parts[1])-1:0;
+            var records=ticketIssuance.customerTickets(telegramUserId,10,page);
+            if(records.isEmpty()) { send(chatId,"tickets.empty",language,mainMenu(language)); return; }
+            StringBuilder response=new StringBuilder(translations.text("tickets.header",language));
+            for(var ticket:records) response.append("\n\n").append(translations.text("tickets.item",language,ticket.number(),ticket.campaignTitle(),ticket.orderReference(),ticket.status(),formatDate(ticket.drawAt(),language)));
+            response.append("\n\n").append(translations.text("tickets.page",language,page+1,page+2));
+            telegram.sendMessage(chatId,response.toString(),mainMenu(language));
+        } catch(RuntimeException invalid){send(chatId,"tickets.page_invalid",language,mainMenu(language));}
     }
 
     private void quoteOrder(String text, long telegramUserId, long chatId, String language) {
