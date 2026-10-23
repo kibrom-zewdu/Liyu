@@ -4,6 +4,7 @@ import com.liyulottery.admin.AdminAuthorizationService;
 import com.liyulottery.admin.AdminRole;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
@@ -15,7 +16,7 @@ public class TicketIssuanceService {
     private final AdminAuthorizationService authorization;
     public TicketIssuanceService(JdbcTemplate jdbc,AdminAuthorizationService authorization){this.jdbc=jdbc;this.authorization=authorization;}
 
-    @Transactional
+    @Transactional(isolation=Isolation.READ_COMMITTED)
     public List<String> issueVerifiedOrder(long reviewerTelegramId,String reference) {
         authorization.requireRole(reviewerTelegramId,AdminRole.PAYMENT_REVIEWER);
         return jdbc.query("SELECT o.id,o.campaign_id,o.user_id,o.quantity,o.status FROM orders o WHERE o.order_reference=? FOR UPDATE",rs->{
@@ -23,8 +24,8 @@ public class TicketIssuanceService {
             long orderId=rs.getLong(1),campaignId=rs.getLong(2),userId=rs.getLong(3); int quantity=rs.getInt(4); String status=rs.getString(5);
             if("APPROVED".equals(status)) return jdbc.query("SELECT ticket_number FROM tickets WHERE order_id=? ORDER BY id",(tickets,n)->tickets.getString(1),orderId);
             if(!"PAYMENT_VERIFIED".equals(status)) throw new IllegalStateException("Tickets can only be issued after a payment reviewer verifies payment.");
-            jdbc.update("INSERT IGNORE INTO campaign_ticket_counters(campaign_id,last_number) VALUES(?,0)",campaignId);
-            long sequence=jdbc.queryForObject("SELECT last_number FROM campaign_ticket_counters WHERE campaign_id=? FOR UPDATE",Long.class,campaignId);
+            jdbc.update("INSERT INTO campaign_ticket_counters(campaign_id,last_number) VALUES(?,LAST_INSERT_ID(?)) ON DUPLICATE KEY UPDATE last_number=LAST_INSERT_ID(last_number+VALUES(last_number))",campaignId,quantity);
+            long sequence=jdbc.queryForObject("SELECT LAST_INSERT_ID()",Long.class)-quantity;
             List<String> numbers=new ArrayList<>(quantity);
             for(int i=1;i<=quantity;i++) {
                 long next=sequence+i;

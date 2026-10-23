@@ -8,12 +8,22 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 import com.liyulottery.admin.AdminAuthorizationService;
 import com.liyulottery.order.OrderService;
 import com.liyulottery.ticket.TicketIssuanceService;
 
 import java.sql.DriverManager;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.stream.IntStream;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -80,5 +90,47 @@ class MariaDbMigrationIntegrationTest {
         assertEquals(2,ticketIssuance.customerTickets(910001,10,0).size());
         assertTrue(ticketIssuance.customerTickets(910002,10,0).isEmpty());
         assertThrows(IllegalStateException.class,()->transactions.execute(status->orders.decide(910003,order.reference(),true,"TEST-TXN-DUP","duplicate approval")));
+
+        int concurrentOrders = 12;
+        long userId = jdbc.queryForObject("SELECT id FROM users WHERE telegram_user_id=910001", Long.class);
+        jdbc.update("INSERT INTO campaigns(campaign_code,ticket_price,currency,draw_at,status) VALUES('CONCUR01',10.0000,'ETB',UTC_TIMESTAMP(6)+INTERVAL 1 DAY,'OPEN')");
+        long concurrentCampaignId = jdbc.queryForObject("SELECT id FROM campaigns WHERE campaign_code='CONCUR01'", Long.class);
+        List<String> references = IntStream.range(0, concurrentOrders)
+                .mapToObj(index -> "CONCURRENT-" + index)
+                .toList();
+        for (String reference : references) {
+            jdbc.update("INSERT INTO orders(order_reference,user_id,campaign_id,quantity,unit_price,total_amount,currency,status) VALUES(?,?,?,1,10.0000,10.0000,'ETB','PAYMENT_VERIFIED')",
+                    reference, userId, concurrentCampaignId);
+        }
+
+        ExecutorService workers = Executors.newFixedThreadPool(concurrentOrders);
+        CountDownLatch ready = new CountDownLatch(concurrentOrders);
+        CountDownLatch start = new CountDownLatch(1);
+        TransactionTemplate ticketTransactions = new TransactionTemplate(new DataSourceTransactionManager(dataSource));
+        ticketTransactions.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
+        try {
+            List<Future<List<String>>> results = references.stream()
+                    .map(reference -> workers.submit(() -> {
+                        ready.countDown();
+                        if (!start.await(10, TimeUnit.SECONDS)) throw new IllegalStateException("Concurrent ticket test did not start.");
+                        return ticketTransactions.execute(status -> ticketIssuance.issueVerifiedOrder(910003, reference));
+                    }))
+                    .toList();
+            assertTrue(ready.await(10, TimeUnit.SECONDS), "All ticket issuers should reach the start gate.");
+            start.countDown();
+
+            List<String> numbers = new ArrayList<>();
+            for (Future<List<String>> result : results) numbers.addAll(result.get(30, TimeUnit.SECONDS));
+
+            assertEquals(concurrentOrders, numbers.size());
+            assertEquals(concurrentOrders, new HashSet<>(numbers).size(), "Concurrent issuance must not duplicate ticket numbers.");
+            assertEquals(concurrentOrders,
+                    jdbc.queryForObject("SELECT COUNT(DISTINCT ticket_number) FROM tickets WHERE campaign_id=?", Integer.class, concurrentCampaignId));
+            assertEquals(concurrentOrders,
+                    jdbc.queryForObject("SELECT last_number FROM campaign_ticket_counters WHERE campaign_id=?", Long.class, concurrentCampaignId));
+        } finally {
+            start.countDown();
+            workers.shutdownNow();
+        }
     }
 }

@@ -6,6 +6,7 @@ import com.liyulottery.ticket.TicketIssuanceService;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
@@ -92,7 +93,7 @@ public class OrderService {
         return jdbc.query("SELECT o.order_reference,o.total_amount,o.currency,o.quantity,r.id,r.telegram_file_id,r.mime_type,r.submitted_at,u.telegram_user_id,u.display_name FROM orders o JOIN payment_receipts r ON r.order_id=o.id AND r.status='PENDING' JOIN users u ON u.id=o.user_id WHERE o.status='RECEIPT_SUBMITTED' ORDER BY r.submitted_at LIMIT 50",(rs,n)->new PendingPayment(rs.getString(1),rs.getBigDecimal(2),rs.getString(3),rs.getInt(4),rs.getLong(5),rs.getString(6),rs.getString(7),rs.getTimestamp(8).toInstant(),rs.getLong(9),rs.getString(10)));
     }
 
-    @Transactional
+    @Transactional(isolation=Isolation.READ_COMMITTED)
     public List<String> decide(long telegramAdminId,String reference,boolean approve,String transactionReference,String note) {
         long adminId=authorization.requireRole(telegramAdminId,AdminRole.PAYMENT_REVIEWER);
         return jdbc.query("SELECT o.id,o.status,r.id FROM orders o JOIN payment_receipts r ON r.order_id=o.id AND r.status='PENDING' WHERE o.order_reference=? ORDER BY r.submission_number DESC LIMIT 1 FOR UPDATE",rs->{
