@@ -12,11 +12,13 @@ import java.util.Map;
 public class TelegramApiClient {
     private final RestClient restClient;
 
-    public TelegramApiClient(RestClient.Builder builder, TelegramProperties properties) {
+    public TelegramApiClient(TelegramProperties properties) {
         if (properties.token() == null || properties.token().isBlank()) {
             throw new IllegalStateException("TELEGRAM_BOT_TOKEN must be configured when Telegram is enabled");
         }
-        this.restClient = builder.baseUrl("https://api.telegram.org/bot" + properties.token() + "/").build();
+        this.restClient = RestClient.builder()
+                .baseUrl("https://api.telegram.org/bot" + properties.token() + "/")
+                .build();
     }
 
     @SuppressWarnings("unchecked")
