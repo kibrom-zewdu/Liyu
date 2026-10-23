@@ -37,4 +37,13 @@ public class TelegramApiClient {
             throw new IllegalStateException("Telegram sendMessage returned an unsuccessful response");
         }
     }
+
+    public void sendPhoto(long chatId, String fileId, String caption) {
+        Map<String, Object> result = restClient.post().uri("sendPhoto")
+                .body(Map.of("chat_id", chatId, "photo", fileId, "caption", caption))
+                .retrieve().body(Map.class);
+        if (result == null || !Boolean.TRUE.equals(result.get("ok"))) {
+            throw new IllegalStateException("Telegram sendPhoto returned an unsuccessful response");
+        }
+    }
 }

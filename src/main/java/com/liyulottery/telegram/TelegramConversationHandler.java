@@ -7,6 +7,8 @@ import com.liyulottery.campaign.CampaignView;
 import com.liyulottery.campaign.PrizeView;
 import com.liyulottery.admin.AdminConversationHandler;
 import com.liyulottery.user.TelegramUserService;
+import com.liyulottery.order.OrderService;
+import com.liyulottery.payment.PaymentReviewHandler;
 import org.springframework.stereotype.Service;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 
@@ -28,16 +30,22 @@ public class TelegramConversationHandler {
     private final TranslationService translations;
     private final CampaignService campaigns;
     private final AdminConversationHandler adminConversations;
+    private final OrderService orders;
+    private final PaymentReviewHandler paymentReview;
     private final ZoneId businessZone;
 
     public TelegramConversationHandler(TelegramApiClient telegram, TelegramUserService users, TranslationService translations,
                                        CampaignService campaigns, AdminConversationHandler adminConversations,
+                                       OrderService orders,
+                                       PaymentReviewHandler paymentReview,
                                        @Value("${app.timezone:Africa/Addis_Ababa}") String timeZone) {
         this.telegram = telegram;
         this.users = users;
         this.translations = translations;
         this.campaigns = campaigns;
         this.adminConversations = adminConversations;
+        this.orders = orders;
+        this.paymentReview = paymentReview;
         this.businessZone = ZoneId.of(timeZone);
     }
 
@@ -60,6 +68,16 @@ public class TelegramConversationHandler {
         Optional<AdminConversationHandler.AdminReply> adminReply = adminConversations.handle(id.longValue(), text, preferredLanguage);
         if (adminReply.isPresent()) {
             telegram.sendMessage(targetChat, adminReply.get().text(), adminReply.get().replyMarkup());
+            return;
+        }
+        Optional<String> paymentReply = paymentReview.handle(id.longValue(), targetChat, text);
+        if(paymentReply.isPresent()) {
+            telegram.sendMessage(targetChat,paymentReply.get(),mainMenu(preferredLanguage));
+            return;
+        }
+
+        if (message.containsKey("photo") || message.containsKey("document")) {
+            handleReceipt(message, id.longValue(), targetChat, preferredLanguage, text);
             return;
         }
 
@@ -96,12 +114,72 @@ public class TelegramConversationHandler {
             send(targetChat, "tickets.empty", language, mainMenu(language));
         } else if (command.startsWith("/results") || text.equals(translations.text("menu.results", language))) {
             send(targetChat, "results.none", language, mainMenu(language));
-        } else if (text.equals(translations.text("menu.buy", language))) {
-            send(targetChat, "campaign.none_buy", language, mainMenu(language));
+        } else if (text.equals(translations.text("menu.buy", language)) || command.startsWith("/buy")) {
+            Optional<CampaignView> available = campaigns.openCampaign(language);
+            if (available.isEmpty()) send(targetChat, "campaign.none_buy", language, mainMenu(language));
+            else telegram.sendMessage(targetChat, translations.text("order.buy_campaign", language, available.get().id(), available.get().title(), available.get().ticketPrice(), available.get().currency()), mainMenu(language));
+        } else if (command.startsWith("/order")) {
+            quoteOrder(text, id.longValue(), targetChat, language);
+        } else if (command.equals("/confirm")) {
+            confirmOrder(id.longValue(), targetChat, language);
         } else if (text.equals(translations.text("menu.draw", language))) {
             sendDrawInformation(targetChat, language);
         } else {
             send(targetChat, "help.prompt", language, mainMenu(language));
+        }
+    }
+
+    private void quoteOrder(String text, long telegramUserId, long chatId, String language) {
+        String[] fields = text.split("\\s+");
+        if (fields.length != 3) {
+            send(chatId, "order.usage", language, mainMenu(language));
+            return;
+        }
+        try {
+            OrderService.OrderQuote quote = orders.quote(telegramUserId, Long.parseLong(fields[1]), Integer.parseInt(fields[2]));
+            telegram.sendMessage(chatId, translations.text("order.quote", language, quote.quantity(), quote.unitPrice(), quote.total(), quote.currency()), mainMenu(language));
+        } catch (RuntimeException failure) {
+            telegram.sendMessage(chatId, translations.text("order.failed", language, failure.getMessage()), mainMenu(language));
+        }
+    }
+
+    private void confirmOrder(long telegramUserId, long chatId, String language) {
+        try {
+            OrderService.OrderSummary order = orders.confirm(telegramUserId);
+            StringBuilder message = new StringBuilder(translations.text("order.created", language, order.reference(), order.quantity(), order.unitPrice(), order.total(), order.currency()));
+            var instructions = orders.paymentInstructions(language);
+            if (instructions.isEmpty()) {
+                message.append("\n\n").append(translations.text("payment.not_configured", language));
+            } else {
+                for (var instruction : instructions) message.append("\n\n").append(instruction.title()).append("\n").append(instruction.instructions());
+                message.append("\n\n").append(translations.text("payment.receipt_prompt", language, order.reference()));
+            }
+            telegram.sendMessage(chatId, message.toString(), mainMenu(language));
+        } catch (RuntimeException failure) {
+            telegram.sendMessage(chatId, translations.text("order.failed", language, failure.getMessage()), mainMenu(language));
+        }
+    }
+
+    private void handleReceipt(Map<?, ?> message, long telegramUserId, long chatId, String language, String caption) {
+        String[] command = caption.trim().split("\\s+");
+        if (command.length != 2 || !"/receipt".equalsIgnoreCase(command[0])) {
+            send(chatId, "receipt.caption_required", language, mainMenu(language));
+            return;
+        }
+        try {
+            String fileId; long size; String mime;
+            Object photoValue = message.get("photo");
+            if (photoValue instanceof List<?> photos && !photos.isEmpty()) {
+                Map<?, ?> photo = map(photos.get(photos.size() - 1));
+                fileId = string(photo.get("file_id")); size = number(photo.get("file_size"), 0); mime = "image/jpeg";
+            } else {
+                Map<?, ?> document = map(message.get("document"));
+                fileId = string(document.get("file_id")); size = number(document.get("file_size"), 0); mime = string(document.get("mime_type"));
+            }
+            int submission = orders.submitReceipt(telegramUserId, command[1], fileId, mime, size);
+            telegram.sendMessage(chatId, translations.text("receipt.submitted", language, command[1], submission), mainMenu(language));
+        } catch (RuntimeException failure) {
+            telegram.sendMessage(chatId, translations.text("receipt.failed", language, failure.getMessage()), mainMenu(language));
         }
     }
 
@@ -173,5 +251,6 @@ public class TelegramConversationHandler {
     }
 
     private static String string(Object value) { return value == null ? "" : value.toString(); }
+    private static long number(Object value, long fallback) { return value instanceof Number n ? n.longValue() : fallback; }
     private static Map<?, ?> map(Object value) { return value instanceof Map<?, ?> result ? result : Map.of(); }
 }

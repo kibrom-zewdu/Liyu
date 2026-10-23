@@ -1,6 +1,6 @@
 # LIYU LOTTERY
 
-Telegram-first lottery management for English, Amharic, and Tigrigna customers. This repository contains the Phase 1 foundation and the start of Phase 2: Spring Boot configuration, MariaDB/Flyway schema, operational health checks, container scaffolding, Telegram long polling, user registration, language selection, and a localized native reply keyboard. Campaign, order, payment, ticket, and results workflows are not yet implemented.
+Telegram-first lottery management for English, Amharic, and Tigrigna customers. The project includes Spring Boot configuration, MariaDB/Flyway schema, operational health checks, Telegram long polling, user registration and language selection, localized menus, database-backed campaign and prize administration, and an initial manual payment review workflow.
 
 ## Safety and business status
 
@@ -56,6 +56,10 @@ SELECT id, 'SUPER_ADMIN' FROM admins WHERE telegram_user_id = <VERIFIED_OWNER_TE
 
 Do not expose a SQL console to the bot or customers. `INITIAL_SUPER_ADMIN_ID` is reserved for a future reviewed bootstrap flow; it currently has no effect.
 
+Payment methods also require explicit operator configuration. Keep `PAYMENTS_ENABLED=false` until the owner has verified legal requirements, approved the method details, official campaign rules, and support/privacy information. With a restricted DBA session, insert only the approved payment method and its reviewed translations into `payment_instructions` and `payment_instruction_translations`; no payment method or account details are supplied by this project. Customer orders remain blocked until both the feature flag and at least one active payment instruction exist.
+
+Customers can request a price quote with `/buy`, send `/order CAMPAIGN_ID QUANTITY`, review the quote, and send `/confirm`. After payment, they attach an image or PDF with caption `/receipt ORDER_REFERENCE`. A payment reviewer can use `/pendingpayments` to retrieve pending receipts, then `/paymentapprove ORDER_REFERENCE VERIFIED_TRANSACTION_REFERENCE [note]` or `/paymentreject ORDER_REFERENCE reason`. The reviewer must verify the transaction against the official account independently; a receipt image is not evidence of payment. Approval marks the order payment verified but does not issue tickets yet. Receipt file IDs are retained in MariaDB while the file itself remains hosted by Telegram; configure a separate private retention and backup policy before production use.
+
 Flyway applies versioned schema migrations at startup. Hibernate is configured with `ddl-auto: validate`; it does not create or modify the production schema.
 
 ## Configuration
@@ -84,10 +88,11 @@ src/main/resources/i18n/         English, Amharic, and Tigrigna message bundles
 ## Implementation status
 
 - Phase 1: Maven test build passes; migration execution against MariaDB is not yet verified.
-- Phase 2: partial. Telegram long polling, update deduplication, profile persistence, language selection, `/start`, `/help`, `/language`, `/prizes`, `/tickets`, `/results`, and the localized main menu are implemented. Menu actions that depend on campaign or business records currently return translated empty-state messages.
-- Phase 3: partial. Campaign status rules, multilingual campaign/prize reads, audited campaign creation and lifecycle services, Telegram campaign creation prompts, and campaign commands are being added. Prize administration commands and editing the remaining campaign fields are still incomplete.
-- Phases 4–7: not implemented yet. Payment approvals, ticket issuance, and official result workflows are not operational.
+- Phase 2: partial. Telegram long polling, update deduplication, profile persistence, language selection, `/start`, `/help`, `/language`, `/prizes`, `/tickets`, `/results`, and the localized main menu are implemented. Ticket history and results await later phases.
+- Phase 3: campaign and prize creation, translations, lifecycle commands, auditing, and customer campaign/prize information are implemented. MariaDB migration execution and end-to-end Telegram use still need environment verification.
+- Phase 4: partial. Quote and confirmation flow, server-side price calculation, order price snapshots, receipt image/PDF submissions, and role-checked manual payment decisions are implemented. Payment instructions must be configured in the database. Reviewers retrieve receipts with `/pendingpayments`; automatic reviewer notifications, replacement-receipt requests, and MariaDB integration tests remain outstanding.
+- Phases 5–7: not implemented yet. Approved payments do not issue tickets. Customer ticket history, result publication, reports, operational hardening, and production verification remain outstanding.
 
 Amharic and Tigrigna starter interface translations are distinct. Have native speakers review them before customer release. Legal terms, official rules, privacy terms, and payment instructions remain unconfigured and must receive business and legal review; the application does not invent them.
 
-The Git working tree is on `main`. The foundation commit is local; no push is claimed.
+The Git working tree is on `main`. Commits are local; no push is claimed.
