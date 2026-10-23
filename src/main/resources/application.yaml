@@ -58,3 +58,4 @@ logging:
   level:
     root: INFO
     com.liyulottery: INFO
+    org.hibernate.orm.connections.pooling: OFF
