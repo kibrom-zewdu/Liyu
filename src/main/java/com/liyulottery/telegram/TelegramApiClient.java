@@ -1,5 +1,6 @@
 package com.liyulottery.telegram;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
@@ -12,6 +13,7 @@ import java.util.Map;
 public class TelegramApiClient {
     private final RestClient restClient;
 
+    @Autowired
     public TelegramApiClient(TelegramProperties properties) {
         this(properties, RestClient.builder());
     }
