@@ -5,6 +5,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
+import org.springframework.context.NoSuchMessageException;
 
 import java.util.List;
 import java.util.Map;
@@ -45,11 +46,18 @@ public class TelegramPollingWorker {
                 } catch (RuntimeException failure) {
                     queue.markFailed(pending.updateId());
                     log.warn("Telegram update processing failed; update will be retried ({})",
-                            failure.getClass().getSimpleName());
+                            safeFailureType(failure));
                 }
             }
         } catch (RuntimeException failure) {
-            log.warn("Telegram polling failed; it will retry ({})", failure.getClass().getSimpleName());
+            log.warn("Telegram polling failed; it will retry ({})", safeFailureType(failure));
         }
+    }
+
+    private static String safeFailureType(RuntimeException failure) {
+        if (failure instanceof NoSuchMessageException missingMessage) {
+            return "NoSuchMessageException " + missingMessage.getMessage();
+        }
+        return failure.getClass().getSimpleName();
     }
 }
