@@ -6,12 +6,12 @@ import com.liyulottery.campaign.CampaignAdminService.NewCampaign;
 import com.liyulottery.campaign.CampaignAdminService.NewPrize;
 import com.liyulottery.campaign.CampaignAdminService.PrizeTranslation;
 import com.liyulottery.common.TranslationService;
+import com.liyulottery.common.EthiopianCalendarService;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
-import java.time.OffsetDateTime;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -26,13 +26,16 @@ public class AdminConversationHandler {
     private final AdminAuthorizationService authorization;
     private final CampaignAdminService campaigns;
     private final TranslationService translations;
+    private final EthiopianCalendarService calendar;
 
     public AdminConversationHandler(AdminConversationStore conversations, AdminAuthorizationService authorization,
-                                    CampaignAdminService campaigns, TranslationService translations) {
+                                    CampaignAdminService campaigns, TranslationService translations,
+                                    EthiopianCalendarService calendar) {
         this.conversations = conversations;
         this.authorization = authorization;
         this.campaigns = campaigns;
         this.translations = translations;
+        this.calendar = calendar;
     }
 
     public Optional<AdminReply> handle(long telegramUserId, String text, String language) {
@@ -61,7 +64,7 @@ public class AdminConversationHandler {
         String[] args = text.trim().split("\\s+");
         String command = args[0].split("@", 2)[0].toLowerCase(java.util.Locale.ROOT);
         if (command.equals("/admin")) {
-            return new AdminReply("Administration commands:\n/campaigns\n/campaignnew\n/campaignprice ID AMOUNT CURRENCY\n/campaigntranslation ID LANG TITLE | DESCRIPTION | TERMS\n/campaigndates ID START CLOSE DRAW TICKET_LIMIT PER_USER_LIMIT\n/campaignpublish ID\n/campaignopen ID\n/campaignclose ID\n/campaigncancel ID\n/prizeadd CAMPAIGN_ID\n/prizeactive ID true|false\n/prizereorder ID ORDER\n/prizetranslation ID LANG NAME | DESCRIPTION\nUse /cancel or Back during a form.", keyboard(language));
+            return new AdminReply("Administration commands:\n/campaigns\n/campaignnew\n/campaignprice ID AMOUNT CURRENCY\n/campaigntranslation ID LANG TITLE | DESCRIPTION | TERMS\n/campaigndates ID | START EC TIME | CLOSE EC TIME | DRAW EC TIME | TICKET_LIMIT | PER_USER_LIMIT\n/campaignpublish ID\n/campaignopen ID\n/campaignclose ID\n/campaigncancel ID\n/prizeadd CAMPAIGN_ID\n/prizeactive ID true|false\n/prizereorder ID ORDER\n/prizetranslation ID LANG NAME | DESCRIPTION\nUse YYYY-MM-DD EC HH:mm for all dates. Use /cancel or Back during a form.", keyboard(language));
         }
         if (command.equals("/campaigns")) {
             List<CampaignAdminService.CampaignSummary> summaries = campaigns.listCampaigns(telegramUserId);
@@ -69,6 +72,9 @@ public class AdminConversationHandler {
             StringBuilder result = new StringBuilder("Campaigns (latest 50):");
             summaries.forEach(item -> result.append("\n#").append(item.id()).append(" ").append(item.code()).append(" — ")
                     .append(item.status()).append(" — ").append(item.ticketPrice().toPlainString()).append(" ").append(item.currency()));
+            summaries.forEach(item -> result.append("\n  Opens: ").append(calendar.format(item.salesStartAt()))
+                    .append("\n  Closes: ").append(calendar.format(item.salesCloseAt()))
+                    .append("\n  Draw: ").append(calendar.format(item.drawAt())));
             return new AdminReply(result.toString(), keyboard(language));
         }
         if (command.equals("/campaignnew")) {
@@ -85,10 +91,14 @@ public class AdminConversationHandler {
             campaigns.updateDraftTranslation(telegramUserId, Long.parseLong(fields[1]), fields[2].toLowerCase(java.util.Locale.ROOT), translation(fields[3]));
             return new AdminReply("Draft campaign translation updated.", keyboard(language));
         }
-        if (command.equals("/campaigndates") && args.length == 7) {
-            campaigns.updateDraftSchedule(telegramUserId, Long.parseLong(args[1]), OffsetDateTime.parse(args[2]).toInstant(),
-                    OffsetDateTime.parse(args[3]).toInstant(), OffsetDateTime.parse(args[4]).toInstant(), limit(args[5]), intLimit(args[6]));
-            return new AdminReply("Draft campaign dates and limits updated.", keyboard(language));
+        if (command.equals("/campaigndates")) {
+            String[] fields = text.trim().split("\\s+", 2);
+            if (fields.length != 2) throw new IllegalArgumentException("Usage: /campaigndates ID START EC TIME | CLOSE EC TIME | DRAW EC TIME | TICKET_LIMIT | PER_USER_LIMIT");
+            String[] values = fields[1].split("\\s*\\|\\s*", -1);
+            if (values.length != 6) throw new IllegalArgumentException("Enter ID | start | close | draw | ticket limit | per-user limit; dates must be YYYY-MM-DD EC HH:mm");
+            campaigns.updateDraftSchedule(telegramUserId, Long.parseLong(values[0].trim()), calendar.parseDateTime(values[1]),
+                    calendar.parseDateTime(values[2]), calendar.parseDateTime(values[3]), limit(values[4]), intLimit(values[5]));
+            return new AdminReply("Draft campaign EC dates and limits updated.", keyboard(language));
         }
         if (command.equals("/campaignpublish") && args.length == 2) {
             campaigns.publish(telegramUserId, Long.parseLong(args[1]));
@@ -204,8 +214,8 @@ public class AdminConversationHandler {
         campaignTranslations.put("am", translation(data.get("translation_am")));
         campaignTranslations.put("ti", translation(data.get("translation_ti")));
         return new NewCampaign(data.get("code").trim().toUpperCase(java.util.Locale.ROOT), new BigDecimal(price[0]),
-                price[1].toUpperCase(java.util.Locale.ROOT), OffsetDateTime.parse(data.get("start")).toInstant(),
-                OffsetDateTime.parse(data.get("close")).toInstant(), OffsetDateTime.parse(data.get("draw")).toInstant(),
+                price[1].toUpperCase(java.util.Locale.ROOT), calendar.parseDateTime(data.get("start")),
+                calendar.parseDateTime(data.get("close")), calendar.parseDateTime(data.get("draw")),
                 limit(limits[0]), intLimit(limits[1]), campaignTranslations);
     }
 
@@ -255,11 +265,11 @@ public class AdminConversationHandler {
         return parsed == 0 ? null : parsed;
     }
 
-    private static void validateStep(int step, String input) {
+    private void validateStep(int step, String input) {
         switch (step) {
             case 0 -> { if (input.length() < 3 || input.length() > 40) throw new IllegalArgumentException("code must be 3–40 characters"); }
             case 1 -> { String[] p = input.split("\\s+"); if (p.length != 2 || new BigDecimal(p[0]).signum() <= 0 || !p[1].matches("[A-Za-z]{3}")) throw new IllegalArgumentException("enter a positive amount and currency, for example 25 ETB"); }
-            case 2, 3, 4 -> OffsetDateTime.parse(input);
+            case 2, 3, 4 -> calendar.parseDateTime(input);
             case 5 -> { String[] p = input.split("\\|", -1); if (p.length != 2 || Long.parseLong(p[0].trim()) < 0 || Integer.parseInt(p[1].trim()) < 0) throw new IllegalArgumentException("enter non-negative limits as ticket-limit|per-user-limit; use 0 for no limit"); }
             case 6, 7, 8 -> { String[] p = input.split("\\|", -1); if (p.length != 3 || p[0].isBlank() || p[1].isBlank() || p[2].isBlank()) throw new IllegalArgumentException("enter title | description | approved terms"); }
             default -> throw new IllegalArgumentException("form step is not recognized");
@@ -288,9 +298,9 @@ public class AdminConversationHandler {
         return switch (step) {
             case 0 -> "Campaign code (3–40 letters/digits, _ or -, uppercase preferred):";
             case 1 -> "Ticket price and currency (example: 25 ETB):";
-            case 2 -> "Sales start as ISO date-time with timezone (example: 2026-12-01T09:00:00+03:00):";
-            case 3 -> "Sales close as ISO date-time with timezone:";
-            case 4 -> "Draw date as ISO date-time with timezone:";
+            case 2 -> "Sales start (Ethiopian Calendar): YYYY-MM-DD EC HH:mm, for example 2019-02-15 EC 14:30:";
+            case 3 -> "Sales close (Ethiopian Calendar): YYYY-MM-DD EC HH:mm:";
+            case 4 -> "Draw date and time (Ethiopian Calendar): YYYY-MM-DD EC HH:mm:";
             case 5 -> "Ticket limit|per-user limit; enter 0 for unlimited (example: 5000|20):";
             case 6 -> "English title | description | approved terms:";
             case 7 -> "Amharic title | description | approved terms (native review required):";

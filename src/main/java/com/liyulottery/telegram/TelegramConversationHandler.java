@@ -2,6 +2,7 @@ package com.liyulottery.telegram;
 
 import com.liyulottery.common.CustomerLanguage;
 import com.liyulottery.common.TranslationService;
+import com.liyulottery.common.EthiopianCalendarService;
 import com.liyulottery.campaign.CampaignService;
 import com.liyulottery.campaign.CampaignView;
 import com.liyulottery.campaign.PrizeView;
@@ -25,10 +26,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Locale;
-import java.time.ZoneId;
 import java.time.Instant;
-import java.time.format.DateTimeFormatter;
-import org.springframework.beans.factory.annotation.Value;
 
 @Service
 @ConditionalOnProperty(prefix = "app.telegram", name = "enabled", havingValue = "true")
@@ -48,7 +46,7 @@ public class TelegramConversationHandler {
     private final SupportAdminHandler supportAdmin;
     private final PublicSettingsService publicSettings;
     private final PublicSettingsHandler settingsHandler;
-    private final ZoneId businessZone;
+    private final EthiopianCalendarService calendar;
 
     public TelegramConversationHandler(TelegramApiClient telegram, TelegramUserService users, TranslationService translations,
                                        CampaignService campaigns, AdminConversationHandler adminConversations,
@@ -62,7 +60,7 @@ public class TelegramConversationHandler {
                                        SupportAdminHandler supportAdmin,
                                        PublicSettingsService publicSettings,
                                        PublicSettingsHandler settingsHandler,
-                                       @Value("${app.timezone:Africa/Addis_Ababa}") String timeZone) {
+                                       EthiopianCalendarService calendar) {
         this.telegram = telegram;
         this.users = users;
         this.translations = translations;
@@ -78,7 +76,7 @@ public class TelegramConversationHandler {
         this.supportAdmin=supportAdmin;
         this.publicSettings=publicSettings;
         this.settingsHandler=settingsHandler;
-        this.businessZone = ZoneId.of(timeZone);
+        this.calendar = calendar;
     }
 
     public void handle(Map<String, Object> update) {
@@ -293,7 +291,9 @@ public class TelegramConversationHandler {
     private String campaignAnnouncement(String language) {
         return campaigns.activeCampaign(language)
                 .map(campaign -> translations.text("campaign.announcement", language, campaign.title(), campaign.description(),
-                        campaign.ticketPrice().toPlainString(), campaign.currency()))
+                        campaign.ticketPrice().toPlainString(), campaign.currency()) + "\n\n" +
+                        translations.text("campaign.schedule", language, calendar.format(campaign.salesStartAt()),
+                                calendar.format(campaign.salesCloseAt()), calendar.format(campaign.drawAt())))
                 .orElseGet(() -> translations.text("campaign.none", language));
     }
 
@@ -325,13 +325,12 @@ public class TelegramConversationHandler {
         }
         CampaignView campaign = active.get();
         telegram.sendMessage(chatId, translations.text("campaign.draw_info", language, campaign.title(),
-                formatDate(campaign.salesCloseAt(), language), formatDate(campaign.drawAt(), language)), mainMenu(language));
+                calendar.format(campaign.salesStartAt()), calendar.format(campaign.salesCloseAt()),
+                calendar.format(campaign.drawAt())), mainMenu(language));
     }
 
     private String formatDate(Instant instant, String language) {
-        if (instant == null) return translations.text("campaign.date_pending", language);
-        return DateTimeFormatter.ofPattern("EEE, dd MMM yyyy HH:mm z", Locale.forLanguageTag(language))
-                .withZone(businessZone).format(instant);
+        return calendar.format(instant);
     }
 
     private static String safe(String value) { return value == null || value.isBlank() ? "—" : value; }

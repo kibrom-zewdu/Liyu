@@ -187,9 +187,9 @@ public class CampaignAdminService {
     @Transactional(readOnly = true)
     public List<CampaignSummary> listCampaigns(long actorTelegramId) {
         authorization.requireRole(actorTelegramId, AdminRole.CAMPAIGN_MANAGER);
-        return jdbcTemplate.query("SELECT id,campaign_code,status,ticket_price,currency FROM campaigns ORDER BY created_at DESC,id DESC LIMIT 50",
+        return jdbcTemplate.query("SELECT id,campaign_code,status,ticket_price,currency,sales_start_at,sales_close_at,draw_at FROM campaigns ORDER BY created_at DESC,id DESC LIMIT 50",
                 (rs, row) -> new CampaignSummary(rs.getLong(1), rs.getString(2), CampaignStatus.valueOf(rs.getString(3)),
-                        rs.getBigDecimal(4), rs.getString(5)));
+                        rs.getBigDecimal(4), rs.getString(5), instant(rs.getTimestamp(6)), instant(rs.getTimestamp(7)), instant(rs.getTimestamp(8))));
     }
 
     private void transition(long actorTelegramId, long campaignId, CampaignStatus target) {
@@ -265,6 +265,7 @@ public class CampaignAdminService {
 
     private static boolean blank(String value) { return value == null || value.isBlank(); }
     private static Timestamp timestamp(Instant value) { return value == null ? null : Timestamp.from(value); }
+    private static Instant instant(Timestamp value) { return value == null ? null : value.toInstant(); }
 
     public record CampaignTranslation(String title, String description, String terms) { }
     public record PrizeTranslation(String name, String description) { }
@@ -273,5 +274,6 @@ public class CampaignAdminService {
                               Map<String, CampaignTranslation> translations) { }
     public record NewPrize(String category, int quantity, BigDecimal monetaryValue, String imageFileId,
                            int displayOrder, Map<String, PrizeTranslation> translations) { }
-    public record CampaignSummary(long id, String code, CampaignStatus status, BigDecimal ticketPrice, String currency) { }
+    public record CampaignSummary(long id, String code, CampaignStatus status, BigDecimal ticketPrice, String currency,
+                                  Instant salesStartAt, Instant salesCloseAt, Instant drawAt) { }
 }
