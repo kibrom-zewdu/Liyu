@@ -44,11 +44,12 @@ public class TelegramPollingWorker {
                     queue.markProcessed(pending.updateId());
                 } catch (RuntimeException failure) {
                     queue.markFailed(pending.updateId());
-                    log.warn("Telegram update processing failed; update will be retried");
+                    log.warn("Telegram update processing failed; update will be retried ({})",
+                            failure.getClass().getSimpleName());
                 }
             }
         } catch (RuntimeException failure) {
-            log.warn("Telegram polling failed; it will retry");
+            log.warn("Telegram polling failed; it will retry ({})", failure.getClass().getSimpleName());
         }
     }
 }
