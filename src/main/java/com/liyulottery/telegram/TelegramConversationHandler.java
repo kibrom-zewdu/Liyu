@@ -95,6 +95,12 @@ public class TelegramConversationHandler {
         long targetChat = chatId.longValue();
 
         String preferredLanguage = CustomerLanguage.fromCode(languageCode).map(CustomerLanguage::code).orElse("en");
+        Optional<AdminConversationHandler.AdminReply> adminImageReply = adminConversations.handleImage(
+                id.longValue(), message.get("photo"), message.get("document"), preferredLanguage);
+        if (adminImageReply.isPresent()) {
+            telegram.sendMessage(targetChat, adminImageReply.get().text(), adminImageReply.get().replyMarkup());
+            return;
+        }
         Optional<AdminConversationHandler.AdminReply> adminReply = adminConversations.handle(id.longValue(), text, preferredLanguage);
         if (adminReply.isPresent()) {
             telegram.sendMessage(targetChat, adminReply.get().text(), adminReply.get().replyMarkup());
@@ -135,8 +141,7 @@ public class TelegramConversationHandler {
         if (chosen.isPresent()) {
             users.setLanguage(id.longValue(), chosen.get());
             String language = chosen.get().code();
-            telegram.sendMessage(targetChat, translations.text("welcome.selected", language) + "\n\n" +
-                    campaignAnnouncement(language), mainMenu(language));
+            sendCampaignWelcome(targetChat, "welcome.selected", language);
             return;
         }
 
@@ -152,8 +157,7 @@ public class TelegramConversationHandler {
         String language = CustomerLanguage.fromCode(languageCode).map(CustomerLanguage::code).orElse("en");
         String command = text.split("\\s+", 2)[0].toLowerCase(Locale.ROOT);
         if (command.startsWith("/start")) {
-            telegram.sendMessage(targetChat, translations.text("welcome.returning", language) + "\n\n" +
-                    campaignAnnouncement(language), mainMenu(language));
+            sendCampaignWelcome(targetChat, "welcome.returning", language);
         } else if (command.startsWith("/help") || text.equals(translations.text("menu.help", language))) {
             send(targetChat, "help.instructions", language, mainMenu(language));
         } else if (command.startsWith("/language") || text.equals(translations.text("menu.language", language))) {
@@ -288,13 +292,24 @@ public class TelegramConversationHandler {
         telegram.sendMessage(chatId, translations.text(key, language), keyboard);
     }
 
-    private String campaignAnnouncement(String language) {
-        return campaigns.activeCampaign(language)
-                .map(campaign -> translations.text("campaign.announcement", language, campaign.title(), campaign.description(),
-                        campaign.ticketPrice().toPlainString(), campaign.currency()) + "\n\n" +
-                        translations.text("campaign.schedule", language, calendar.format(campaign.salesStartAt()),
-                                calendar.format(campaign.salesCloseAt()), calendar.format(campaign.drawAt())))
+    private void sendCampaignWelcome(long chatId, String welcomeKey, String language) {
+        Optional<CampaignView> active = campaigns.activeCampaign(language);
+        String announcement = active.map(campaign -> campaignAnnouncement(campaign, language))
                 .orElseGet(() -> translations.text("campaign.none", language));
+        String message = translations.text(welcomeKey, language) + "\n\n" + announcement;
+        Map<String, Object> menu = mainMenu(language);
+        if (active.isPresent() && active.get().promotionalImageFileId() != null) {
+            telegram.sendPhoto(chatId, active.get().promotionalImageFileId(), message, menu);
+        } else {
+            telegram.sendMessage(chatId, message, menu);
+        }
+    }
+
+    private String campaignAnnouncement(CampaignView campaign, String language) {
+        return translations.text("campaign.announcement", language, campaign.title(), campaign.description(),
+                campaign.ticketPrice().toPlainString(), campaign.currency()) + "\n\n" +
+                translations.text("campaign.schedule", language, calendar.format(campaign.salesStartAt()),
+                        calendar.format(campaign.salesCloseAt()), calendar.format(campaign.drawAt()));
     }
 
     private void sendPrizes(long chatId, String language) {
@@ -308,13 +323,21 @@ public class TelegramConversationHandler {
             send(chatId, "campaign.none_prizes", language, mainMenu(language));
             return;
         }
-        StringBuilder response = new StringBuilder(translations.text("campaign.prize_header", language, active.get().title()));
+        telegram.sendMessage(chatId, translations.text("campaign.prize_header", language, active.get().title()), mainMenu(language));
         for (PrizeView prize : prizeList) {
-            response.append("\n\n").append(translations.text("campaign.prize_item", language,
-                    prize.name(), prize.quantity(), safe(prize.category())));
-            if (prize.description() != null && !prize.description().isBlank()) response.append("\n").append(prize.description());
+            String description = translations.text("campaign.prize_item", language,
+                    prize.name(), prize.quantity(), safe(prize.category()));
+            if (prize.description() != null && !prize.description().isBlank()) description += "\n" + prize.description();
+            if (prize.imageFileId() != null && !prize.imageFileId().isBlank()) {
+                telegram.sendPhoto(chatId, prize.imageFileId(), caption(description), mainMenu(language));
+            } else {
+                telegram.sendMessage(chatId, description, mainMenu(language));
+            }
         }
-        telegram.sendMessage(chatId, response.toString(), mainMenu(language));
+    }
+
+    private static String caption(String value) {
+        return value.length() <= 1000 ? value : value.substring(0, 997) + "...";
     }
 
     private void sendDrawInformation(long chatId, String language) {
