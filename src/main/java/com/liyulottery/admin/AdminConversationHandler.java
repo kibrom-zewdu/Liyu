@@ -16,10 +16,14 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Comparator;
+import java.util.Set;
 
 @Service
 @ConditionalOnProperty(prefix = "app.telegram", name = "enabled", havingValue = "true")
 public class AdminConversationHandler {
+    private static final long MAX_IMAGE_BYTES = 10L * 1024 * 1024;
+    private static final Set<String> IMAGE_MIME_TYPES = Set.of("image/jpeg", "image/png", "image/webp");
     private static final List<String> FIELD_KEYS = List.of("code", "price", "start", "close", "draw", "limits", "translation_en", "translation_am", "translation_ti");
     private static final List<String> PRIZE_FIELD_KEYS = List.of("category", "quantity", "order", "translation_en", "translation_am", "translation_ti", "value", "image_file_id");
     private final AdminConversationStore conversations;
@@ -43,10 +47,15 @@ public class AdminConversationHandler {
         if (saved.isPresent()) {
             try {
                 authorization.requireRole(telegramUserId, AdminRole.CAMPAIGN_MANAGER);
+                if (saved.get().type().startsWith("CONFIRM_")) {
+                    return Optional.of(continueConfirmation(telegramUserId, text, language, saved.get()));
+                }
                 return Optional.of(continueCampaignForm(telegramUserId, text, language, saved.get()));
             } catch (AccessDeniedException denied) {
                 conversations.clear(telegramUserId);
                 return Optional.of(reply("admin.denied", language));
+            } catch (IllegalArgumentException | IllegalStateException invalid) {
+                return Optional.of(new AdminReply("Not saved: " + invalid.getMessage(), keyboard(language)));
             }
         }
         if (!isAdminCommand(text)) return Optional.empty();
@@ -60,11 +69,50 @@ public class AdminConversationHandler {
         }
     }
 
+    public Optional<AdminReply> handleImage(long telegramUserId, Object photoValue, Object documentValue, String language) {
+        Optional<AdminConversationStore.AdminConversation> saved = conversations.find(telegramUserId);
+        if (saved.isEmpty() || !(saved.get().type().equals("WAIT_CAMPAIGN_IMAGE") || saved.get().type().equals("WAIT_PRIZE_IMAGE"))) {
+            return Optional.empty();
+        }
+        try {
+            authorization.requireRole(telegramUserId, AdminRole.CAMPAIGN_MANAGER);
+            Map<?, ?> image;
+            String mime;
+            if (documentValue instanceof Map<?, ?> document && !document.isEmpty()) {
+                image = document;
+                mime = string(document.get("mime_type"));
+            } else if (photoValue instanceof List<?> photos && !photos.isEmpty()) {
+                image = photos.stream().filter(Map.class::isInstance).map(Map.class::cast)
+                        .max(Comparator.comparingLong(candidate -> number(candidate.get("file_size"), -1))).orElse(Map.of());
+                mime = "image/jpeg";
+            } else {
+                throw new IllegalArgumentException("Send a Telegram photo or an image document");
+            }
+            String fileId = string(image.get("file_id"));
+            long size = number(image.get("file_size"), -1);
+            if (!IMAGE_MIME_TYPES.contains(mime.toLowerCase(java.util.Locale.ROOT))) {
+                throw new IllegalArgumentException("Use a JPEG, PNG, or WebP image");
+            }
+            if (fileId.isBlank() || size < 1 || size > MAX_IMAGE_BYTES) {
+                throw new IllegalArgumentException("Image metadata must include a file ID and a size from 1 byte to 10 MiB");
+            }
+            String id = saved.get().data().get("id");
+            String action = saved.get().type().equals("WAIT_CAMPAIGN_IMAGE") ? "CAMPAIGN_IMAGE" : "PRIZE_IMAGE";
+            return Optional.of(stage(telegramUserId, action, Map.of("id", id, "file_id", fileId),
+                    "Attach this image to " + (action.equals("CAMPAIGN_IMAGE") ? "campaign" : "prize") + " #" + id + "?"));
+        } catch (AccessDeniedException denied) {
+            conversations.clear(telegramUserId);
+            return Optional.of(reply("admin.denied", language));
+        } catch (IllegalArgumentException | IllegalStateException invalid) {
+            return Optional.of(new AdminReply(invalid.getMessage(), keyboard(language)));
+        }
+    }
+
     private AdminReply handleCommand(long telegramUserId, String text, String language) {
         String[] args = text.trim().split("\\s+");
         String command = args[0].split("@", 2)[0].toLowerCase(java.util.Locale.ROOT);
         if (command.equals("/admin")) {
-            return new AdminReply("Administration commands:\n/campaigns\n/campaignnew\n/campaignprice ID AMOUNT CURRENCY\n/campaigntranslation ID LANG TITLE | DESCRIPTION | TERMS\n/campaigndates ID | START EC TIME | CLOSE EC TIME | DRAW EC TIME | TICKET_LIMIT | PER_USER_LIMIT\n/campaignpublish ID\n/campaignopen ID\n/campaignclose ID\n/campaigncancel ID\n/prizeadd CAMPAIGN_ID\n/prizeactive ID true|false\n/prizereorder ID ORDER\n/prizetranslation ID LANG NAME | DESCRIPTION\nUse YYYY-MM-DD EC HH:mm for all dates. Use /cancel or Back during a form.", keyboard(language));
+            return new AdminReply("Administration commands:\n/campaigns\n/campaignnew\n/campaignprice ID AMOUNT CURRENCY\n/campaigntranslation ID LANG TITLE | DESCRIPTION | TERMS\n/campaigndates ID | START EC TIME | CLOSE EC TIME | DRAW EC TIME | TICKET_LIMIT | PER_USER_LIMIT\n/campaignimage ID (then send an image)\n/campaignpublish ID\n/campaignopen ID\n/campaignclose ID\n/campaigncancel ID\n/prizeadd CAMPAIGN_ID\n/prizeactive ID true|false\n/prizereorder ID ORDER\n/prizequantity ID QUANTITY\n/prizeimage ID (then send an image)\n/prizetranslation ID LANG NAME | DESCRIPTION\nConfirm important changes with /confirm. Use YYYY-MM-DD EC HH:mm for dates. Use /cancel during a pending action.", keyboard(language));
         }
         if (command.equals("/campaigns")) {
             List<CampaignAdminService.CampaignSummary> summaries = campaigns.listCampaigns(telegramUserId);
@@ -82,39 +130,37 @@ public class AdminConversationHandler {
             return prompt(0, language);
         }
         if (command.equals("/campaignprice") && args.length == 4) {
-            campaigns.updateDraftPrice(telegramUserId, Long.parseLong(args[1]), new BigDecimal(args[2]), args[3].toUpperCase(java.util.Locale.ROOT));
-            return new AdminReply("Draft campaign price updated.", keyboard(language));
+            return stage(telegramUserId, "CAMPAIGN_PRICE", Map.of("id", args[1], "price", args[2], "currency", args[3].toUpperCase(java.util.Locale.ROOT)),
+                    "Change campaign #" + args[1] + " ticket price to " + args[2] + " " + args[3].toUpperCase(java.util.Locale.ROOT) + "?");
         }
         if (command.equals("/campaigntranslation")) {
             String[] fields = text.trim().split("\\s+", 4);
             if (fields.length != 4) throw new IllegalArgumentException("Usage: /campaigntranslation ID en|am|ti title | description | approved terms");
-            campaigns.updateDraftTranslation(telegramUserId, Long.parseLong(fields[1]), fields[2].toLowerCase(java.util.Locale.ROOT), translation(fields[3]));
-            return new AdminReply("Draft campaign translation updated.", keyboard(language));
+            return stage(telegramUserId, "CAMPAIGN_TRANSLATION", Map.of("id", fields[1], "language", fields[2].toLowerCase(java.util.Locale.ROOT), "translation", fields[3]),
+                    "Update campaign #" + fields[1] + " text in " + fields[2].toLowerCase(java.util.Locale.ROOT) + "?\n" + fields[3]);
         }
         if (command.equals("/campaigndates")) {
             String[] fields = text.trim().split("\\s+", 2);
             if (fields.length != 2) throw new IllegalArgumentException("Usage: /campaigndates ID START EC TIME | CLOSE EC TIME | DRAW EC TIME | TICKET_LIMIT | PER_USER_LIMIT");
             String[] values = fields[1].split("\\s*\\|\\s*", -1);
             if (values.length != 6) throw new IllegalArgumentException("Enter ID | start | close | draw | ticket limit | per-user limit; dates must be YYYY-MM-DD EC HH:mm");
-            campaigns.updateDraftSchedule(telegramUserId, Long.parseLong(values[0].trim()), calendar.parseDateTime(values[1]),
-                    calendar.parseDateTime(values[2]), calendar.parseDateTime(values[3]), limit(values[4]), intLimit(values[5]));
-            return new AdminReply("Draft campaign EC dates and limits updated.", keyboard(language));
+            calendar.parseDateTime(values[1]); calendar.parseDateTime(values[2]); calendar.parseDateTime(values[3]);
+            Map<String, String> data = Map.of("id", values[0].trim(), "start", values[1].trim(), "close", values[2].trim(),
+                    "draw", values[3].trim(), "ticket_limit", values[4].trim(), "per_user_limit", values[5].trim());
+            return stage(telegramUserId, "CAMPAIGN_DATES", data, "Update campaign #" + values[0].trim() + " schedule?\nOpens: " + calendar.format(calendar.parseDateTime(values[1]))
+                    + "\nCloses: " + calendar.format(calendar.parseDateTime(values[2])) + "\nDraw: " + calendar.format(calendar.parseDateTime(values[3])));
         }
         if (command.equals("/campaignpublish") && args.length == 2) {
-            campaigns.publish(telegramUserId, Long.parseLong(args[1]));
-            return new AdminReply("Campaign published as SCHEDULED.", keyboard(language));
+            return stage(telegramUserId, "CAMPAIGN_PUBLISH", Map.of("id", args[1]), "Publish campaign #" + args[1] + " as scheduled?");
         }
         if (command.equals("/campaignopen") && args.length == 2) {
-            campaigns.openSales(telegramUserId, Long.parseLong(args[1]));
-            return new AdminReply("Campaign sales opened.", keyboard(language));
+            return stage(telegramUserId, "CAMPAIGN_OPEN", Map.of("id", args[1]), "Open sales for campaign #" + args[1] + "?");
         }
         if (command.equals("/campaignclose") && args.length == 2) {
-            campaigns.closeSales(telegramUserId, Long.parseLong(args[1]));
-            return new AdminReply("Campaign sales closed.", keyboard(language));
+            return stage(telegramUserId, "CAMPAIGN_CLOSE", Map.of("id", args[1]), "Close sales for campaign #" + args[1] + "?");
         }
         if (command.equals("/campaigncancel") && args.length == 2) {
-            campaigns.cancel(telegramUserId, Long.parseLong(args[1]));
-            return new AdminReply("Campaign cancelled.", keyboard(language));
+            return stage(telegramUserId, "CAMPAIGN_CANCEL", Map.of("id", args[1]), "Cancel campaign #" + args[1] + "?");
         }
         if (command.equals("/prizeadd") && args.length == 2) {
             Map<String, String> data = Map.of("campaign_id", args[1]);
@@ -123,23 +169,48 @@ public class AdminConversationHandler {
         }
         if (command.equals("/prizeactive") && args.length == 3) {
             if (!args[2].equalsIgnoreCase("true") && !args[2].equalsIgnoreCase("false")) throw new IllegalArgumentException("Use true or false for the active flag");
-            campaigns.setPrizeActive(telegramUserId, Long.parseLong(args[1]), Boolean.parseBoolean(args[2]));
-            return new AdminReply("Prize active status updated.", keyboard(language));
+            return stage(telegramUserId, "PRIZE_ACTIVE", Map.of("id", args[1], "active", args[2].toLowerCase(java.util.Locale.ROOT)),
+                    "Set prize #" + args[1] + " active=" + args[2].toLowerCase(java.util.Locale.ROOT) + "?");
         }
         if (command.equals("/prizereorder") && args.length == 3) {
-            campaigns.reorderPrize(telegramUserId, Long.parseLong(args[1]), Integer.parseInt(args[2]));
-            return new AdminReply("Prize display order updated.", keyboard(language));
+            Integer.parseInt(args[2]);
+            return stage(telegramUserId, "PRIZE_ORDER", Map.of("id", args[1], "order", args[2]), "Set prize #" + args[1] + " display order to " + args[2] + "?");
+        }
+        if (command.equals("/prizequantity") && args.length == 3) {
+            if (Integer.parseInt(args[2]) < 1) throw new IllegalArgumentException("Quantity must be positive");
+            return stage(telegramUserId, "PRIZE_QUANTITY", Map.of("id", args[1], "quantity", args[2]), "Set prize #" + args[1] + " quantity to " + args[2] + "?");
+        }
+        if (command.equals("/campaignimage") && args.length == 2) {
+            conversations.save(telegramUserId, "WAIT_CAMPAIGN_IMAGE", 0, Map.of("id", args[1]));
+            return new AdminReply("Send the campaign image as a photo or image document (maximum 10 MiB). Send /cancel to stop.", keyboard(language));
+        }
+        if (command.equals("/campaignimage") && args.length == 3 && args[2].equalsIgnoreCase("remove")) {
+            return stage(telegramUserId, "CAMPAIGN_IMAGE_REMOVE", Map.of("id", args[1]), "Remove the campaign image from campaign #" + args[1] + "?");
+        }
+        if (command.equals("/prizeimage") && args.length == 2) {
+            conversations.save(telegramUserId, "WAIT_PRIZE_IMAGE", 0, Map.of("id", args[1]));
+            return new AdminReply("Send the prize image as a photo or image document (maximum 10 MiB). Send /cancel to stop.", keyboard(language));
+        }
+        if (command.equals("/prizeimage") && args.length == 3 && args[2].equalsIgnoreCase("remove")) {
+            return stage(telegramUserId, "PRIZE_IMAGE_REMOVE", Map.of("id", args[1]), "Remove the image from prize #" + args[1] + "?");
         }
         if (command.equals("/prizetranslation")) {
             String[] fields = text.trim().split("\\s+", 4);
             if (fields.length != 4) throw new IllegalArgumentException("Usage: /prizetranslation ID en|am|ti name | description");
-            campaigns.updatePrizeTranslation(telegramUserId, Long.parseLong(fields[1]), fields[2].toLowerCase(java.util.Locale.ROOT), prizeTranslation(fields[3]));
-            return new AdminReply("Prize translation updated.", keyboard(language));
+            return stage(telegramUserId, "PRIZE_TRANSLATION", Map.of("id", fields[1], "language", fields[2].toLowerCase(java.util.Locale.ROOT), "translation", fields[3]),
+                    "Update prize #" + fields[1] + " text in " + fields[2].toLowerCase(java.util.Locale.ROOT) + "?\n" + fields[3]);
         }
         return new AdminReply("Use /admin to view available campaign commands.", keyboard(language));
     }
 
     private AdminReply continueCampaignForm(long telegramUserId, String text, String language, AdminConversationStore.AdminConversation state) {
+        if (state.type().startsWith("WAIT_")) {
+            if (text.trim().equalsIgnoreCase("/cancel")) {
+                conversations.clear(telegramUserId);
+                return new AdminReply("Image update cancelled.", keyboard(language));
+            }
+            return new AdminReply("Send an image, or /cancel to stop.", keyboard(language));
+        }
         if ("PRIZE_NEW".equals(state.type())) return continuePrizeForm(telegramUserId, text, language, state);
         if (!"CAMPAIGN_NEW".equals(state.type())) {
             conversations.clear(telegramUserId);
@@ -166,9 +237,7 @@ public class AdminConversationHandler {
             validateStep(state.currentStep(), input);
             data.put(FIELD_KEYS.get(state.currentStep()), input);
             if (state.currentStep() == FIELD_KEYS.size() - 1) {
-                long campaignId = campaigns.createDraft(telegramUserId, toCampaign(data));
-                conversations.clear(telegramUserId);
-                return new AdminReply("Draft campaign created with ID " + campaignId + ". Use /campaignpublish " + campaignId + " after review.", keyboard(language));
+                return stage(telegramUserId, "CAMPAIGN_CREATE", data, "Create this campaign draft with the supplied three-language text and schedule? Review all values, then send /confirm.");
             }
             conversations.save(telegramUserId, state.currentStep() + 1, data);
             return prompt(state.currentStep() + 1, language);
@@ -195,9 +264,7 @@ public class AdminConversationHandler {
             Map<String, String> data = new HashMap<>(state.data());
             data.put(PRIZE_FIELD_KEYS.get(state.currentStep()), input);
             if (state.currentStep() == PRIZE_FIELD_KEYS.size() - 1) {
-                long prizeId = campaigns.addPrize(telegramUserId, Long.parseLong(data.get("campaign_id")), toPrize(data));
-                conversations.clear(telegramUserId);
-                return new AdminReply("Prize created with ID " + prizeId + ".", keyboard(language));
+                return stage(telegramUserId, "PRIZE_CREATE", data, "Create this prize with the supplied three-language names, quantity, order, value, and image reference? Review and send /confirm.");
             }
             conversations.save(telegramUserId, "PRIZE_NEW", state.currentStep() + 1, data);
             return prizePrompt(state.currentStep() + 1, language);
@@ -280,6 +347,60 @@ public class AdminConversationHandler {
 
     private AdminReply prizePrompt(int step, String language) { return new AdminReply(prizePromptText(step), keyboard(language)); }
 
+    private AdminReply stage(long telegramUserId, String action, Map<String, String> data, String preview) {
+        conversations.save(telegramUserId, "CONFIRM_" + action, 0, data);
+        return new AdminReply(preview + "\nSend /confirm to save or /cancel to discard.", keyboard("en"));
+    }
+
+    private AdminReply continueConfirmation(long telegramUserId, String text, String language,
+                                           AdminConversationStore.AdminConversation state) {
+        String answer = text.trim();
+        if (answer.equalsIgnoreCase("/cancel")) {
+            conversations.clear(telegramUserId);
+            return new AdminReply("Change cancelled; nothing was saved.", keyboard(language));
+        }
+        if (!answer.equalsIgnoreCase("/confirm")) {
+            return new AdminReply("Nothing has been saved. Send /confirm to apply this change or /cancel to discard it.", keyboard(language));
+        }
+        Map<String, String> data = state.data();
+        long id = data.containsKey("id") ? Long.parseLong(data.get("id")) : -1;
+        switch (state.type()) {
+            case "CONFIRM_CAMPAIGN_PRICE" -> campaigns.updateDraftPrice(telegramUserId, id,
+                    new BigDecimal(data.get("price")), data.get("currency"));
+            case "CONFIRM_CAMPAIGN_TRANSLATION" -> campaigns.updateDraftTranslation(telegramUserId, id,
+                    data.get("language"), translation(data.get("translation")));
+            case "CONFIRM_CAMPAIGN_DATES" -> campaigns.updateDraftSchedule(telegramUserId, id,
+                    calendar.parseDateTime(data.get("start")), calendar.parseDateTime(data.get("close")),
+                    calendar.parseDateTime(data.get("draw")), limit(data.get("ticket_limit")), intLimit(data.get("per_user_limit")));
+            case "CONFIRM_CAMPAIGN_PUBLISH" -> campaigns.publish(telegramUserId, id);
+            case "CONFIRM_CAMPAIGN_OPEN" -> campaigns.openSales(telegramUserId, id);
+            case "CONFIRM_CAMPAIGN_CLOSE" -> campaigns.closeSales(telegramUserId, id);
+            case "CONFIRM_CAMPAIGN_CANCEL" -> campaigns.cancel(telegramUserId, id);
+            case "CONFIRM_PRIZE_ACTIVE" -> campaigns.setPrizeActive(telegramUserId, id, Boolean.parseBoolean(data.get("active")));
+            case "CONFIRM_PRIZE_ORDER" -> campaigns.reorderPrize(telegramUserId, id, Integer.parseInt(data.get("order")));
+            case "CONFIRM_PRIZE_QUANTITY" -> campaigns.updatePrizeQuantity(telegramUserId, id, Integer.parseInt(data.get("quantity")));
+            case "CONFIRM_PRIZE_TRANSLATION" -> campaigns.updatePrizeTranslation(telegramUserId, id,
+                    data.get("language"), prizeTranslation(data.get("translation")));
+            case "CONFIRM_CAMPAIGN_IMAGE_REMOVE" -> campaigns.updateCampaignImage(telegramUserId, id, null);
+            case "CONFIRM_PRIZE_IMAGE_REMOVE" -> campaigns.updatePrizeImage(telegramUserId, id, null);
+            case "CONFIRM_CAMPAIGN_IMAGE" -> campaigns.updateCampaignImage(telegramUserId, id, data.get("file_id"));
+            case "CONFIRM_PRIZE_IMAGE" -> campaigns.updatePrizeImage(telegramUserId, id, data.get("file_id"));
+            case "CONFIRM_CAMPAIGN_CREATE" -> {
+                long created = campaigns.createDraft(telegramUserId, toCampaign(data));
+                conversations.clear(telegramUserId);
+                return new AdminReply("Draft campaign created with ID " + created + ". Review it with /campaigns, then publish when ready.", keyboard(language));
+            }
+            case "CONFIRM_PRIZE_CREATE" -> {
+                long created = campaigns.addPrize(telegramUserId, Long.parseLong(data.get("campaign_id")), toPrize(data));
+                conversations.clear(telegramUserId);
+                return new AdminReply("Prize created with ID " + created + ".", keyboard(language));
+            }
+            default -> throw new IllegalStateException("This pending confirmation is not supported");
+        }
+        conversations.clear(telegramUserId);
+        return new AdminReply("Confirmed and saved.", keyboard(language));
+    }
+
     private static String prizePromptText(int step) {
         return switch (step) {
             case 0 -> "Prize category (or -):";
@@ -316,6 +437,9 @@ public class AdminConversationHandler {
         return Map.of("keyboard", List.of(List.of(translations.text("admin.back", safe), translations.text("admin.cancel", safe))),
                 "resize_keyboard", true, "is_persistent", true);
     }
+
+    private static String string(Object value) { return value == null ? "" : value.toString(); }
+    private static long number(Object value, long fallback) { return value instanceof Number number ? number.longValue() : fallback; }
 
     private static boolean isAdminCommand(String text) {
         return text != null && (text.startsWith("/admin") || text.startsWith("/campaign") || text.startsWith("/prize"));
