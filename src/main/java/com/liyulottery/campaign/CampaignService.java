@@ -18,7 +18,7 @@ public class CampaignService {
     public Optional<CampaignView> activeCampaign(String languageCode) {
         List<CampaignView> results = jdbcTemplate.query("""
                 SELECT c.id,c.campaign_code,COALESCE(t.title,en.title),COALESCE(t.description,en.description),
-                       c.ticket_price,c.currency,c.sales_start_at,c.sales_close_at,c.draw_at,c.status
+                       c.ticket_price,c.currency,c.sales_start_at,c.sales_close_at,c.draw_at,c.status,c.promotional_image_file_id
                 FROM campaigns c
                 JOIN campaign_translations en ON en.campaign_id=c.id AND en.language_code='en'
                 LEFT JOIN campaign_translations t ON t.campaign_id=c.id AND t.language_code=?
@@ -27,7 +27,7 @@ public class CampaignService {
                 LIMIT 1
                 """, (rs, row) -> new CampaignView(rs.getLong(1), rs.getString(2), rs.getString(3), rs.getString(4),
                 rs.getBigDecimal(5), rs.getString(6), instant(rs.getTimestamp(7)), instant(rs.getTimestamp(8)),
-                instant(rs.getTimestamp(9)), CampaignStatus.valueOf(rs.getString(10))), languageCode);
+                instant(rs.getTimestamp(9)), CampaignStatus.valueOf(rs.getString(10)), rs.getString(11)), languageCode);
         return results.stream().findFirst();
     }
 
@@ -35,7 +35,7 @@ public class CampaignService {
     public Optional<CampaignView> openCampaign(String languageCode) {
         List<CampaignView> results = jdbcTemplate.query("""
                 SELECT c.id,c.campaign_code,COALESCE(t.title,en.title),COALESCE(t.description,en.description),
-                       c.ticket_price,c.currency,c.sales_start_at,c.sales_close_at,c.draw_at,c.status
+                       c.ticket_price,c.currency,c.sales_start_at,c.sales_close_at,c.draw_at,c.status,c.promotional_image_file_id
                 FROM campaigns c
                 JOIN campaign_translations en ON en.campaign_id=c.id AND en.language_code='en'
                 LEFT JOIN campaign_translations t ON t.campaign_id=c.id AND t.language_code=?
@@ -43,7 +43,7 @@ public class CampaignService {
                   AND (c.sales_close_at IS NULL OR c.sales_close_at>UTC_TIMESTAMP(6))
                 ORDER BY c.sales_start_at,c.id LIMIT 1
                 """, (rs,row)->new CampaignView(rs.getLong(1),rs.getString(2),rs.getString(3),rs.getString(4),rs.getBigDecimal(5),
-                rs.getString(6),instant(rs.getTimestamp(7)),instant(rs.getTimestamp(8)),instant(rs.getTimestamp(9)),CampaignStatus.valueOf(rs.getString(10))),languageCode);
+                rs.getString(6),instant(rs.getTimestamp(7)),instant(rs.getTimestamp(8)),instant(rs.getTimestamp(9)),CampaignStatus.valueOf(rs.getString(10)),rs.getString(11)),languageCode);
         return results.stream().findFirst();
     }
 

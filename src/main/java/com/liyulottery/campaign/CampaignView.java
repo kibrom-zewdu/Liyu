@@ -5,4 +5,4 @@ import java.time.Instant;
 
 public record CampaignView(long id, String code, String title, String description, BigDecimal ticketPrice,
                            String currency, Instant salesStartAt, Instant salesCloseAt, Instant drawAt,
-                           CampaignStatus status) { }
+                           CampaignStatus status, String promotionalImageFileId) { }
