@@ -52,10 +52,11 @@ public class CampaignAdminService {
         if (price == null || price.signum() <= 0 || currency == null || !CURRENCY.matcher(currency).matches()) {
             throw new IllegalArgumentException("Price must be positive and currency must be a three-letter uppercase code");
         }
-        int changed = jdbcTemplate.update("UPDATE campaigns SET ticket_price=?,currency=?,updated_by_admin_id=? WHERE id=? AND status='DRAFT'",
+        assertCampaignMutable(campaignId);
+        String previous = jdbcTemplate.queryForObject("SELECT CONCAT(ticket_price,' ',currency) FROM campaigns WHERE id=?", String.class, campaignId);
+        jdbcTemplate.update("UPDATE campaigns SET ticket_price=?,currency=?,updated_by_admin_id=? WHERE id=?",
                 price, currency, actor, campaignId);
-        if (changed != 1) throw new IllegalStateException("Only a draft campaign can be edited");
-        audit(actor, "CAMPAIGN_PRICE_CHANGED", "campaign", campaignId, null, price + " " + currency);
+        audit(actor, "CAMPAIGN_PRICE_CHANGED", "campaign", campaignId, previous, price + " " + currency);
     }
 
     @Transactional
@@ -65,13 +66,13 @@ public class CampaignAdminService {
                 || blank(translation.description()) || blank(translation.terms())) {
             throw new IllegalArgumentException("Enter a supported language and non-empty title, description, and approved terms");
         }
-        Integer draft = jdbcTemplate.queryForObject("SELECT COUNT(*) FROM campaigns WHERE id=? AND status='DRAFT'", Integer.class, campaignId);
-        if (draft == null || draft != 1) throw new IllegalStateException("Only a draft campaign can be edited");
+        assertCampaignMutable(campaignId);
+        String previous = jdbcTemplate.queryForObject("SELECT title FROM campaign_translations WHERE campaign_id=? AND language_code=?", String.class, campaignId, language);
         jdbcTemplate.update("""
                 INSERT INTO campaign_translations(campaign_id,language_code,title,description,terms) VALUES(?,?,?,?,?)
                 ON DUPLICATE KEY UPDATE title=VALUES(title),description=VALUES(description),terms=VALUES(terms)
                 """, campaignId, language, translation.title().trim(), translation.description().trim(), translation.terms().trim());
-        audit(actor, "CAMPAIGN_TRANSLATION_CHANGED", "campaign", campaignId, language, translation.title().trim());
+        audit(actor, "CAMPAIGN_TRANSLATION_CHANGED", "campaign", campaignId, language + ": " + previous, language + ": " + translation.title().trim());
     }
 
     @Transactional
@@ -82,12 +83,25 @@ public class CampaignAdminService {
                 || (ticketLimit != null && ticketLimit < 1) || (perUserLimit != null && perUserLimit < 1)) {
             throw new IllegalArgumentException("Dates must be ordered start < close < draw; limits must be positive or unlimited");
         }
-        int updated = jdbcTemplate.update("""
+        assertCampaignMutable(campaignId);
+        String before = jdbcTemplate.queryForObject("SELECT CONCAT(sales_start_at,'|',sales_close_at,'|',draw_at) FROM campaigns WHERE id=?", String.class, campaignId);
+        jdbcTemplate.update("""
                 UPDATE campaigns SET sales_start_at=?,sales_close_at=?,draw_at=?,ticket_limit=?,per_user_limit=?,updated_by_admin_id=?
-                WHERE id=? AND status='DRAFT'
+                WHERE id=?
                 """, timestamp(start), timestamp(close), timestamp(draw), ticketLimit, perUserLimit, actor, campaignId);
-        if (updated != 1) throw new IllegalStateException("Only a draft campaign can be edited");
-        audit(actor, "CAMPAIGN_SCHEDULE_CHANGED", "campaign", campaignId, null, start + "|" + close + "|" + draw);
+        audit(actor, "CAMPAIGN_SCHEDULE_CHANGED", "campaign", campaignId, before, start + "|" + close + "|" + draw);
+    }
+
+    @Transactional
+    public void updateCampaignImage(long actorTelegramId, long campaignId, String imageFileId) {
+        long actor = authorization.requireRole(actorTelegramId, AdminRole.CAMPAIGN_MANAGER);
+        if (imageFileId != null && (imageFileId.isBlank() || imageFileId.length() > 255)) {
+            throw new IllegalArgumentException("Campaign image reference is invalid");
+        }
+        assertCampaignMutable(campaignId);
+        String previous = jdbcTemplate.queryForObject("SELECT promotional_image_file_id FROM campaigns WHERE id=?", String.class, campaignId);
+        jdbcTemplate.update("UPDATE campaigns SET promotional_image_file_id=?,updated_by_admin_id=? WHERE id=?", imageFileId, actor, campaignId);
+        audit(actor, imageFileId == null ? "CAMPAIGN_IMAGE_REMOVED" : "CAMPAIGN_IMAGE_CHANGED", "campaign", campaignId, previous, imageFileId);
     }
 
     @Transactional
@@ -171,6 +185,28 @@ public class CampaignAdminService {
     }
 
     @Transactional
+    public void updatePrizeQuantity(long actorTelegramId, long prizeId, int quantity) {
+        long actor = authorization.requireRole(actorTelegramId, AdminRole.CAMPAIGN_MANAGER);
+        if (quantity < 1) throw new IllegalArgumentException("Prize quantity must be positive");
+        assertPrizeMutable(prizeId);
+        Integer previous = jdbcTemplate.queryForObject("SELECT quantity FROM prizes WHERE id=?", Integer.class, prizeId);
+        jdbcTemplate.update("UPDATE prizes SET quantity=?,updated_at=CURRENT_TIMESTAMP(6) WHERE id=?", quantity, prizeId);
+        audit(actor, "PRIZE_QUANTITY_CHANGED", "prize", prizeId, String.valueOf(previous), String.valueOf(quantity));
+    }
+
+    @Transactional
+    public void updatePrizeImage(long actorTelegramId, long prizeId, String imageFileId) {
+        long actor = authorization.requireRole(actorTelegramId, AdminRole.CAMPAIGN_MANAGER);
+        if (imageFileId != null && (imageFileId.isBlank() || imageFileId.length() > 255)) {
+            throw new IllegalArgumentException("Prize image reference is invalid");
+        }
+        assertPrizeMutable(prizeId);
+        String previous = jdbcTemplate.queryForObject("SELECT image_file_id FROM prizes WHERE id=?", String.class, prizeId);
+        jdbcTemplate.update("UPDATE prizes SET image_file_id=?,updated_at=CURRENT_TIMESTAMP(6) WHERE id=?", imageFileId, prizeId);
+        audit(actor, imageFileId == null ? "PRIZE_IMAGE_REMOVED" : "PRIZE_IMAGE_CHANGED", "prize", prizeId, previous, imageFileId);
+    }
+
+    @Transactional
     public void updatePrizeTranslation(long actorTelegramId, long prizeId, String language, PrizeTranslation translation) {
         long actor = authorization.requireRole(actorTelegramId, AdminRole.CAMPAIGN_MANAGER);
         if (!LANGUAGES.contains(language) || translation == null || blank(translation.name())) {
@@ -209,8 +245,18 @@ public class CampaignAdminService {
         String status = jdbcTemplate.queryForObject("""
                 SELECT c.status FROM campaigns c JOIN prizes p ON p.campaign_id=c.id WHERE p.id=? FOR UPDATE
                 """, String.class, prizeId);
-        if (status == null || status.equals("COMPLETED") || status.equals("CANCELLED")) {
-            throw new IllegalStateException("Prize does not exist or its campaign is completed or cancelled");
+        if (status == null || status.equals("COMPLETED") || status.equals("CANCELLED")) throw new IllegalStateException("Prize does not exist or its campaign is completed or cancelled");
+        Integer publishedResults = jdbcTemplate.queryForObject("""
+                SELECT COUNT(*) FROM draw_results r JOIN prizes p ON p.campaign_id=r.campaign_id
+                WHERE p.id=? AND r.status='PUBLISHED'
+                """, Integer.class, prizeId);
+        if (publishedResults != null && publishedResults > 0) throw new IllegalStateException("Prizes linked to published results cannot be changed");
+    }
+
+    private void assertCampaignMutable(long campaignId) {
+        String status = jdbcTemplate.queryForObject("SELECT status FROM campaigns WHERE id=? FOR UPDATE", String.class, campaignId);
+        if ("COMPLETED".equals(status) || "CANCELLED".equals(status)) {
+            throw new IllegalStateException("Completed or cancelled campaigns cannot be changed");
         }
     }
 
