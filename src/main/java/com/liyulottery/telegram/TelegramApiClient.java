@@ -7,6 +7,7 @@ import org.springframework.web.client.RestClient;
 
 import java.util.List;
 import java.util.Map;
+import java.util.HashMap;
 
 @Component
 @ConditionalOnProperty(prefix = "app.telegram", name = "enabled", havingValue = "true")
@@ -47,8 +48,17 @@ public class TelegramApiClient {
     }
 
     public void sendPhoto(long chatId, String fileId, String caption) {
+        sendPhoto(chatId, fileId, caption, Map.of());
+    }
+
+    public void sendPhoto(long chatId, String fileId, String caption, Map<String, Object> replyMarkup) {
+        Map<String, Object> request = new HashMap<>();
+        request.put("chat_id", chatId);
+        request.put("photo", fileId);
+        request.put("caption", caption);
+        if (replyMarkup != null && !replyMarkup.isEmpty()) request.put("reply_markup", replyMarkup);
         Map<String, Object> result = restClient.post().uri("sendPhoto")
-                .body(Map.of("chat_id", chatId, "photo", fileId, "caption", caption))
+                .body(request)
                 .retrieve().body(Map.class);
         if (result == null || !Boolean.TRUE.equals(result.get("ok"))) {
             throw new IllegalStateException("Telegram sendPhoto returned an unsuccessful response");
